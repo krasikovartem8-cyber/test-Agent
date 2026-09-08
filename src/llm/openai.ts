@@ -8,31 +8,38 @@ import { LLMAuthError, LLMTransientError, type LLMProvider, type ToolOutcome, ty
 type Msg = OpenAI.Chat.ChatCompletionMessageParam;
 
 /** Convert the shared (Anthropic-style) tool definitions to OpenAI function tools. */
-function toOpenAITools(tools: Anthropic.Tool[]): OpenAI.Chat.ChatCompletionTool[] {
-  return tools.map((t) => ({
-    type: "function",
-    function: {
-      name: t.name,
-      description: t.description ?? "",
-      parameters: t.input_schema as Record<string, unknown>,
-      strict: Boolean(t.strict),
-    },
-  }));
+function toOpenAITools(tools: Anthropic.Tool[], strictSupported: boolean): OpenAI.Chat.ChatCompletionTool[] {
+  return tools
+    .filter((t) => config.vision || t.name !== "screenshot")
+    .map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description ?? "",
+        parameters: t.input_schema as Record<string, unknown>,
+        ...(strictSupported && t.strict ? { strict: true } : {}),
+      },
+    }));
 }
 
-const OPENAI_TOOLS = toOpenAITools(TOOLS);
-
-/** Only reasoning models accept `reasoning_effort`. */
+/** Only OpenAI's own reasoning models accept `reasoning_effort`. */
 function supportsReasoning(model: string): boolean {
-  return /^(gpt-5|o\d)/.test(model);
+  return !config.openaiBaseURL && /^(gpt-5|o\d)/.test(model);
 }
 
-/** GPT models via the OpenAI Chat Completions API with function calling. */
+/**
+ * Any OpenAI-compatible Chat Completions endpoint: OpenAI itself, or a
+ * gateway such as Groq, OpenRouter, Google's compatibility layer, Together or
+ * a local Ollama - set OPENAI_BASE_URL and the matching key. Gateways vary in
+ * what they accept, so `strict` schemas and `reasoning_effort` are only sent
+ * to the official endpoint.
+ */
 export class OpenAIProvider implements LLMProvider {
-  readonly name = "openai";
+  readonly name = config.openaiBaseURL ? `openai-compatible (${new URL(config.openaiBaseURL).host})` : "openai";
   readonly model = config.openaiModel;
   readonly subagentModel = config.openaiSubagentModel;
-  private client = new OpenAI();
+  private client = new OpenAI({ baseURL: config.openaiBaseURL || undefined, timeout: 120_000 });
+  private tools = toOpenAITools(TOOLS, !config.openaiBaseURL);
   private messages: Msg[] = [];
 
   historyLength(): number {
@@ -71,7 +78,7 @@ export class OpenAIProvider implements LLMProvider {
       const stream = await this.client.chat.completions.create({
         model: this.model,
         messages: [{ role: "system", content: SYSTEM_PROMPT }, ...this.messages],
-        tools: OPENAI_TOOLS,
+        tools: this.tools,
         stream: true,
         stream_options: { include_usage: true },
         max_completion_tokens: 16_000,

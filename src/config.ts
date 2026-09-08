@@ -19,6 +19,10 @@ export const config = {
   /** OpenAI equivalents. */
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.4",
   openaiSubagentModel: process.env.OPENAI_SUBAGENT_MODEL ?? "gpt-5.4-mini",
+  /** Any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini compat, Ollama…). */
+  openaiBaseURL: process.env.OPENAI_BASE_URL ?? "",
+  /** Set VISION=0 for models that cannot read images: no screenshots are sent. */
+  vision: process.env.VISION !== "0",
 
   effort: (process.env.AGENT_EFFORT ?? "high") as Effort,
   maxSteps: envInt("MAX_STEPS", 80),

@@ -134,10 +134,11 @@ export class Agent {
       case "get_page_state": {
         const snap = await b.snapshot();
         const text = formatSnapshot(snap, config.snapshotTextChars, config.snapshotMaxElements);
-        if (input.include_screenshot) return { text, image: await b.screenshot() };
+        if (input.include_screenshot && config.vision) return { text, image: await b.screenshot() };
         return { text };
       }
       case "screenshot":
+        if (!config.vision) return { text: "This model cannot read images. Rely on get_page_state and query_page instead." };
         return { text: `Screenshot of the viewport at ${b.page.url()}`, image: await b.screenshot() };
       case "click":
         return { text: (await b.click(Number(input.ref))).message };
