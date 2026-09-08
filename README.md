@@ -32,8 +32,8 @@
 |---|---|---|
 | Язык | TypeScript (Node ≥ 20) | Лучшие SDK и для Playwright, и для Anthropic; один процесс — браузер и агент |
 | Автоматизация браузера | **Playwright** (persistent context, канал Chrome) | Стабильные действия с авто-ожиданием, пробивает Shadow DOM, persistent-профиль сохраняет логины между запусками, встроенная запись видео |
-| Модель | **Claude Opus 5** (`claude-opus-5`) через `@anthropic-ai/sdk`, ручной агентный цикл с tool use | Ручной цикл (а не Tool Runner) даёт полный контроль над историей, компакцией, стримингом и retry |
-| Субагент | Claude Sonnet 5 (`claude-sonnet-5`) | Чтение больших страниц и сжатие истории — дешевле и быстрее |
+| Модель | Слой провайдера с двумя реализациями: **Anthropic** (`claude-opus-5`) и **OpenAI** (`gpt-5.4`), ручной агентный цикл с tool use | Ручной цикл (а не SDK-раннеры) даёт полный контроль над историей, компакцией, стримингом и retry; провайдер выбирается по наличию ключа |
+| Субагент | `claude-sonnet-5` / `gpt-5.4-mini` | Чтение больших страниц и сжатие истории — дешевле и быстрее |
 | Представление страницы | Собственный DOM-снапшот с нумерованными элементами `[N]` + опциональный скриншот | См. раздел «Как агент видит страницу» |
 
 ## Архитектура
@@ -48,6 +48,11 @@ src/
     prompts.ts          системный промпт, промпт субагента, промпт компакции
     context.ts          управление контекстом: учёт токенов, компакция, заметки, детектор зацикливания
     subagent.ts         DOM-субагент (query_page)
+  llm/
+    types.ts            интерфейс провайдера: история в родном формате, turn(), complete()
+    anthropic.ts        Claude: Messages API, стриминг, adaptive thinking, prompt caching
+    openai.ts           GPT: Chat Completions, function calling, стриминг, reasoning_effort
+    index.ts            выбор провайдера по LLM_PROVIDER или по наличию ключа
   browser/
     Browser.ts          обёртка над Playwright: навигация, клик/ввод/скролл по ref, вкладки, диалоги
     snapshot.ts         сбор снапшота внутри страницы и его текстовое представление
@@ -111,14 +116,16 @@ scripts/
 
 ## Запуск
 
-Требования: Node.js ≥ 20, Google Chrome (иначе будет скачан Chromium), ключ Anthropic API.
+Требования: Node.js ≥ 20, Google Chrome (иначе будет скачан Chromium), ключ Anthropic **или** OpenAI API.
 
 ```bash
 git clone <repo> browser-agent && cd browser-agent
 npm run setup            # npm install + playwright install chromium (запасной браузер)
-cp .env.example .env     # вписать ANTHROPIC_API_KEY
+cp .env.example .env     # вписать ANTHROPIC_API_KEY или OPENAI_API_KEY
 npm run dev
 ```
+
+Провайдер выбирается автоматически по заданному ключу (Anthropic приоритетнее), либо явно через `LLM_PROVIDER=openai`. Список инструментов и промпты общие; различаются только транспорт и формат истории (`src/llm/`). У OpenAI изображения не могут лежать в результате инструмента, поэтому скриншоты добавляются отдельным `user`-сообщением сразу после результата.
 
 Дальше в терминале пишете задачу и наблюдаете за браузером. Задачу можно передать и аргументом:
 
@@ -142,8 +149,11 @@ npm run typecheck
 
 | Переменная | По умолчанию | Смысл |
 |---|---|---|
-| `AGENT_MODEL` | `claude-opus-5` | основная модель |
-| `SUBAGENT_MODEL` | `claude-sonnet-5` | субагент и компакция |
+| `LLM_PROVIDER` | `auto` | `anthropic`, `openai` или автовыбор по ключу |
+| `AGENT_MODEL` | `claude-opus-5` | основная модель (Anthropic) |
+| `SUBAGENT_MODEL` | `claude-sonnet-5` | субагент и компакция (Anthropic) |
+| `OPENAI_MODEL` | `gpt-5.4` | основная модель (OpenAI) |
+| `OPENAI_SUBAGENT_MODEL` | `gpt-5.4-mini` | субагент и компакция (OpenAI) |
 | `AGENT_EFFORT` | `high` | глубина рассуждений (`low`…`max`); `medium` заметно быстрее для демо |
 | `MAX_STEPS` | `80` | шагов до запроса подтверждения |
 | `CONTEXT_TOKEN_LIMIT` | `150000` | порог компакции |

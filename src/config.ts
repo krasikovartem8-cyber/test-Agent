@@ -9,10 +9,17 @@ function envInt(name: string, def: number): number {
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export const config = {
-  /** Main planning/acting model. */
+  /** anthropic | openai | auto (auto = whichever API key is set, Anthropic first). */
+  provider: (process.env.LLM_PROVIDER ?? "auto") as "anthropic" | "openai" | "auto",
+
+  /** Anthropic: main planning/acting model and the cheaper sub-agent model. */
   model: process.env.AGENT_MODEL ?? "claude-opus-5",
-  /** Cheaper model used by the DOM sub-agent and the compaction summarizer. */
   subagentModel: process.env.SUBAGENT_MODEL ?? "claude-sonnet-5",
+
+  /** OpenAI equivalents. */
+  openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.4",
+  openaiSubagentModel: process.env.OPENAI_SUBAGENT_MODEL ?? "gpt-5.4-mini",
+
   effort: (process.env.AGENT_EFFORT ?? "high") as Effort,
   maxSteps: envInt("MAX_STEPS", 80),
   /** When the live context exceeds this many tokens the history is compacted. */

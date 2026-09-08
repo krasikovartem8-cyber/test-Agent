@@ -1,6 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { compactionPrompt } from "./prompts.js";
+import type { LLMProvider } from "../llm/types.js";
 
 /**
  * Context management for the agent loop.
@@ -18,39 +18,30 @@ import { compactionPrompt } from "./prompts.js";
  *    after every compaction, so hard facts are never lost to summarization.
  */
 export class ContextManager {
-  messages: Anthropic.MessageParam[] = [];
   notes: string[] = [];
   task = "";
-  /** Size of the context as of the last API response (input + output tokens). */
+  /** Size of the context as of the last model response. */
   contextTokens = 0;
   compactions = 0;
   private recentCalls: string[] = [];
 
-  constructor(private client: Anthropic) {}
+  constructor(private llm: LLMProvider) {}
 
   startTask(task: string): void {
     this.task = task;
     this.recentCalls = [];
-    this.messages.push({ role: "user", content: task });
-  }
-
-  push(message: Anthropic.MessageParam): void {
-    this.messages.push(message);
+    this.llm.addUserText(task);
   }
 
   reset(): void {
-    this.messages = [];
+    this.llm.reset();
     this.notes = [];
     this.contextTokens = 0;
     this.recentCalls = [];
   }
 
-  recordUsage(usage: Anthropic.Usage): void {
-    this.contextTokens =
-      usage.input_tokens +
-      (usage.cache_creation_input_tokens ?? 0) +
-      (usage.cache_read_input_tokens ?? 0) +
-      usage.output_tokens;
+  recordUsage(contextTokens: number): void {
+    this.contextTokens = contextTokens;
   }
 
   needsCompaction(): boolean {
@@ -70,69 +61,19 @@ export class ContextManager {
     return n >= 3 && this.recentCalls[n - 1] === sig && this.recentCalls[n - 2] === sig && this.recentCalls[n - 3] === sig;
   }
 
-  /** Human-readable transcript of the history (images dropped, long results truncated). */
-  private transcript(): string {
-    const out: string[] = [];
-    const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n) + ` …[${s.length - n} more chars]` : s);
-    for (const m of this.messages) {
-      if (typeof m.content === "string") {
-        out.push(`${m.role.toUpperCase()}: ${m.content}`);
-        continue;
-      }
-      for (const block of m.content) {
-        switch (block.type) {
-          case "text":
-            out.push(`${m.role.toUpperCase()}: ${trunc(block.text, 2000)}`);
-            break;
-          case "tool_use":
-            out.push(`→ ${block.name}(${JSON.stringify(block.input)})`);
-            break;
-          case "tool_result": {
-            const c = block.content;
-            const text =
-              typeof c === "string"
-                ? c
-                : (c ?? [])
-                    .map((b) => (b.type === "text" ? b.text : "[screenshot]"))
-                    .join("\n");
-            out.push(`← ${block.is_error ? "ERROR: " : ""}${trunc(text, 1500)}`);
-            break;
-          }
-          default:
-            break; // thinking, images etc.
-        }
-      }
-    }
-    return out.join("\n");
-  }
-
   /** Summarize everything so far and restart the history from the summary. */
   async compact(currentUrl: string): Promise<string> {
-    const transcript = this.transcript();
-    const response = await this.client.messages.create({
-      model: config.subagentModel,
-      max_tokens: 4000,
-      system: compactionPrompt(this.task, this.notes),
-      output_config: { effort: "medium" },
-      messages: [{ role: "user", content: `TRANSCRIPT:\n${transcript}` }],
-    });
-    const summary = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
+    const transcript = this.llm.transcript();
+    const summary = await this.llm.complete(compactionPrompt(this.task, this.notes), `TRANSCRIPT:\n${transcript}`, "Write the progress summary now.", "medium");
 
     this.compactions++;
-    this.messages = [
-      {
-        role: "user",
-        content:
-          `Task: ${this.task}\n\n` +
-          `[Your context was compacted (#${this.compactions}). Progress summary of your work so far:]\n${summary}\n\n` +
-          `Your saved notes:\n${this.notes.length ? this.notes.map((n) => "- " + n).join("\n") : "(none)"}\n\n` +
-          `The browser is still open at ${currentUrl}. Continue the task from the current state: call get_page_state first (old element refs are invalid).`,
-      },
-    ];
+    this.llm.reset();
+    this.llm.addUserText(
+      `Task: ${this.task}\n\n` +
+        `[Your context was compacted (#${this.compactions}). Progress summary of your work so far:]\n${summary}\n\n` +
+        `Your saved notes:\n${this.notes.length ? this.notes.map((n) => "- " + n).join("\n") : "(none)"}\n\n` +
+        `The browser is still open at ${currentUrl}. Continue the task from the current state: call get_page_state first (old element refs are invalid).`,
+    );
     this.contextTokens = 0;
     return summary;
   }

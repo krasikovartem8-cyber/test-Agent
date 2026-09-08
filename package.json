@@ -19,6 +19,7 @@
     "@anthropic-ai/sdk": "latest",
     "chalk": "^5.4.1",
     "dotenv": "^16.4.5",
+    "openai": "^7.10.0",
     "playwright": "^1.55.0"
   },
   "devDependencies": {

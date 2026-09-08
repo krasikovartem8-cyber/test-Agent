@@ -1,10 +1,10 @@
 import { execSync } from "node:child_process";
-import Anthropic from "@anthropic-ai/sdk";
 import chalk from "chalk";
 import { config } from "./config.js";
 import { BrowserController } from "./browser/Browser.js";
 import { Agent } from "./agent/Agent.js";
 import { TerminalUI } from "./ui/terminal.js";
+import { createProvider } from "./llm/index.js";
 
 function parseArgs(argv: string[]): { task?: string } {
   const out: { task?: string } = {};
@@ -33,25 +33,25 @@ async function main(): Promise<void> {
   config.recordVideo = process.env.RECORD_VIDEO === "1";
   config.headless = process.env.HEADLESS === "1";
 
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    console.log(chalk.yellow("⚠ ANTHROPIC_API_KEY is not set (put it in .env or the environment)."));
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN && !process.env.OPENAI_API_KEY) {
+    console.log(chalk.yellow("⚠ No API key found. Put ANTHROPIC_API_KEY or OPENAI_API_KEY into .env."));
   }
 
-  const client = new Anthropic();
+  const llm = createProvider();
   const ui = new TerminalUI();
   const browser = new BrowserController();
 
   console.log(chalk.bold("🌐 Browser Agent"));
   console.log(
     chalk.dim(
-      `model=${config.model} · sub-agent=${config.subagentModel} · effort=${config.effort} · max steps=${config.maxSteps} · context limit=${config.contextTokenLimit} tokens` +
+      `provider=${llm.name} · model=${llm.model} · sub-agent=${llm.subagentModel} · effort=${config.effort} · max steps=${config.maxSteps} · context limit=${config.contextTokenLimit} tokens` +
         (config.recordVideo ? " · recording video" : ""),
     ),
   );
   console.log(chalk.dim("Type a task and press Enter. Commands: /reset (forget history), /tabs, /exit\n"));
 
   await browser.launch();
-  const agent = new Agent(client, browser, ui);
+  const agent = new Agent(llm, browser, ui);
 
   const shutdown = async () => {
     ui.close();
