@@ -1,0 +1,29 @@
+{
+  "name": "browser-agent",
+  "version": "1.0.0",
+  "description": "Autonomous AI agent that drives a real browser to solve multi-step tasks (Playwright + Claude)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "setup": "npm install && npx playwright install chromium",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
+    "smoke": "tsx scripts/smoke-browser.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "chalk": "^5.4.1",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.55.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

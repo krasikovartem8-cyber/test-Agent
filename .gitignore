@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.browser-profile/
+recordings/
+screenshots/
+*.log
+.smoke-profile/
