@@ -53,12 +53,17 @@ async function main(): Promise<void> {
   await browser.launch();
   const agent = new Agent(llm, browser, ui);
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(chalk.dim("\nClosing the browser…"));
     ui.close();
     await browser.close();
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 
   const runOne = async (task: string) => {
     const started = Date.now();

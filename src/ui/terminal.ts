@@ -10,6 +10,7 @@ export class TerminalUI implements AgentUI {
   private rl = readline.createInterface({ input, output });
   private textOpen = false;
   private thinkingOpen = false;
+  private closed = false;
 
   assistantText(delta: string): void {
     this.closeThinking();
@@ -73,24 +74,47 @@ export class TerminalUI implements AgentUI {
     output.write(chalk.yellow(`⚠ ${message}\n`));
   }
 
+  /**
+   * readline rejects the pending question with an AbortError when the user
+   * presses Ctrl+C or the interface is closed. Treat that as "no answer"
+   * instead of crashing the process with an unhandled rejection.
+   */
+  private async ask(prompt: string): Promise<string> {
+    if (this.closed) return "";
+    try {
+      return await this.rl.question(prompt);
+    } catch {
+      this.closed = true;
+      output.write("\n");
+      return "";
+    }
+  }
+
   async askUser(question: string): Promise<string> {
     this.turnEnd();
     output.write(chalk.yellowBright(`\n❓ Agent asks: ${question}\n`));
-    return this.rl.question(chalk.bold("👤 You: "));
+    return this.ask(chalk.bold("👤 You: "));
   }
 
   async confirm(question: string): Promise<boolean> {
     this.turnEnd();
-    const a = await this.rl.question(chalk.yellowBright(`❓ ${question} [y/N] `));
+    const a = await this.ask(chalk.yellowBright(`❓ ${question} [y/N] `));
     return /^(y|yes|д|да)/i.test(a.trim());
   }
 
-  /** Prompt for the next task. */
+  /** Prompt for the next task. Returns "/exit" if input was interrupted. */
   async prompt(): Promise<string> {
-    return this.rl.question(chalk.bold("\n👤 You: "));
+    const line = await this.ask(chalk.bold("\n👤 You: "));
+    return this.closed ? "/exit" : line;
+  }
+
+  /** True once stdin is gone (Ctrl+C, closed pipe). */
+  isClosed(): boolean {
+    return this.closed;
   }
 
   close(): void {
+    this.closed = true;
     this.rl.close();
   }
 }
