@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>Стенд: модальное окно фильтров</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; }
+      .page { padding: 16px; }
+      .grid a { display: inline-block; margin: 4px 8px; }
+      dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+      dialog { width: 640px; height: 420px; border: 1px solid #ccc; border-radius: 12px; }
+      .row { display: flex; gap: 8px; margin: 12px 0; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Reproduces the shape that used to defeat the agent: a long page with many
+      controls, plus a dialog whose price inputs sat far past the element limit.
+    -->
+    <div class="page" id="background">
+      <h1>Ноутбуки</h1>
+      <button id="open">Все фильтры</button>
+      <div class="grid" id="noise"></div>
+    </div>
+
+    <dialog id="filters" aria-label="Все фильтры">
+      <h2>Все фильтры</h2>
+      <div class="row">
+        <input id="from" placeholder="от" value="81" />
+        <input id="to" placeholder="до" value="1 237 567" />
+      </div>
+      <label><input type="checkbox" /> Бренд проверен</label>
+      <div class="row">
+        <button id="cancel">Отменить</button>
+        <button id="apply">Применить</button>
+      </div>
+    </dialog>
+
+    <script>
+      // 300 background links: without the modal rule these crowd out the dialog.
+      const noise = document.getElementById("noise");
+      for (let i = 1; i <= 300; i++) {
+        const a = document.createElement("a");
+        a.href = "#item" + i;
+        a.textContent = "Товар " + i;
+        noise.appendChild(a);
+      }
+      const dlg = document.getElementById("filters");
+      document.getElementById("open").addEventListener("click", () => {
+        dlg.showModal();
+        document.getElementById("background").setAttribute("aria-hidden", "true");
+      });
+      document.getElementById("cancel").addEventListener("click", () => {
+        dlg.close();
+        document.getElementById("background").removeAttribute("aria-hidden");
+      });
+    </script>
+  </body>
+</html>

@@ -30,6 +30,8 @@ export interface PageSnapshot {
   scroll: { y: number; pageHeight: number; viewportHeight: number };
   elements: SnapshotElement[];
   totalInteractive: number;
+  /** Name of the open modal dialog the snapshot is restricted to, if any. */
+  modal?: string;
   /** Visible text of the page (whitespace-collapsed, capped). */
   text: string;
 }
@@ -60,15 +62,57 @@ export function collectSnapshot(opts: SnapshotOptions): PageSnapshot {
   };
   clearRefs(document);
 
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
   const candidates: Element[] = [];
-  const collect = (root: Document | ShadowRoot) => {
+  const collect = (root: Document | ShadowRoot | Element) => {
     for (const el of Array.from(root.querySelectorAll(INTERACTIVE))) candidates.push(el);
     for (const el of Array.from(root.querySelectorAll("*"))) if (el.shadowRoot) collect(el.shadowRoot);
   };
-  collect(document);
 
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  /**
+   * When a modal dialog is open the rest of the page is unreachable, and
+   * listing it wastes the element budget on controls that cannot be clicked -
+   * which is how an agent ends up reopening the same dialog forever. Restrict
+   * the snapshot to the dialog itself.
+   */
+  const visibleArea = (el: Element): number => {
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return 0;
+    const r = el.getBoundingClientRect();
+    return r.width * r.height;
+  };
+  const dialogs = Array.from(
+    document.querySelectorAll<HTMLElement>('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]'),
+  )
+    .filter((d) => visibleArea(d) > 40_000 && d.querySelector(INTERACTIVE))
+    .sort((a, b) => visibleArea(b) - visibleArea(a));
+
+  /**
+   * Many sites build overlays out of plain divs with no dialog role. Whatever
+   * sits on top at the centre of the screen is what the user can actually use,
+   * so walk up from that point looking for a large positioned layer.
+   */
+  const topmostOverlay = (): Element | null => {
+    let node: Element | null = document.elementFromPoint(Math.floor(vw / 2), Math.floor(vh / 2));
+    let found: Element | null = null;
+    while (node && node !== document.body && node !== document.documentElement) {
+      const st = window.getComputedStyle(node);
+      const z = parseInt(st.zIndex, 10);
+      if ((st.position === "fixed" || st.position === "absolute" || st.position === "sticky") && Number.isFinite(z) && z >= 10) {
+        const r = node.getBoundingClientRect();
+        if (r.width * r.height > vw * vh * 0.35 && node.querySelector(INTERACTIVE)) found = node;
+      }
+      node = node.parentElement;
+    }
+    return found;
+  };
+
+  const modal = dialogs[0] ?? topmostOverlay();
+
+  if (modal) collect(modal);
+  else collect(document);
 
   const visibleRect = (el: Element): DOMRect | null => {
     const style = window.getComputedStyle(el);
@@ -126,6 +170,9 @@ export function collectSnapshot(opts: SnapshotOptions): PageSnapshot {
   for (const el of candidates) {
     if (seen.has(el)) continue;
     seen.add(el);
+    // Content hidden from assistive tech is hidden from the agent too: that is
+    // how sites mark the inert background behind an open overlay.
+    if (el.closest('[aria-hidden="true"], [inert]')) continue;
     const rect = visibleRect(el);
     if (!rect) continue;
     // A <label> tied to a control we also list is noise: it duplicates the
@@ -185,14 +232,20 @@ export function collectSnapshot(opts: SnapshotOptions): PageSnapshot {
   elements.sort((a, b) => Number(b.inViewport) - Number(a.inViewport) || a.ref - b.ref);
   const limited = elements.slice(0, opts.maxElements);
 
-  const rawText = (document.body?.innerText ?? "")
+  // With a dialog open, the text behind it is not what the user is looking at.
+  const rawText = (((modal ?? document.body) as HTMLElement | null)?.innerText ?? "")
     .replace(/[ \t ]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
 
+  const modalName = modal
+    ? clean(modal.getAttribute("aria-label") || modal.querySelector("h1, h2, [role='heading']")?.textContent || "dialog", 60)
+    : undefined;
+
   return {
     url: location.href,
     title: document.title,
+    modal: modalName,
     scroll: {
       y: Math.round(window.scrollY),
       pageHeight: document.documentElement.scrollHeight,
@@ -236,6 +289,9 @@ export function formatSnapshot(s: PageSnapshot, textChars: number, maxElements: 
   const lines: string[] = [];
   lines.push("URL: " + (s.url.length > 140 ? s.url.slice(0, 140) + "…" : s.url));
   lines.push("Title: " + s.title);
+  if (s.modal) {
+    lines.push(`A modal dialog is open ("${s.modal}"). Only its controls are listed and only they are clickable; close it to reach the page behind.`);
+  }
   const screens = Math.max(1, Math.ceil(s.scroll.pageHeight / Math.max(1, s.scroll.viewportHeight)));
   const cur = Math.min(screens, Math.floor(s.scroll.y / Math.max(1, s.scroll.viewportHeight)) + 1);
   lines.push(`Scroll: screen ${cur} of ~${screens} (y=${s.scroll.y}px, page height ${s.scroll.pageHeight}px)`);

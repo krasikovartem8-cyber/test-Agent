@@ -71,8 +71,9 @@ export class ContextManager {
     if (this.recentCalls.length > 6) this.recentCalls.shift();
     if (this.recentNames.length > 6) this.recentNames.shift();
 
-    const n = this.recentCalls.length;
-    const identical = n >= 3 && this.recentCalls.slice(-3).every((s) => s === sig);
+    // Three identical calls among the last six count as stuck even when the
+    // agent interleaves them with observations.
+    const identical = this.recentCalls.filter((s) => s === sig).length >= 3;
     // Also catch rephrased repetition: the same tool four times running, e.g.
     // asking the sub-agent the same question in slightly different words.
     const m = this.recentNames.length;

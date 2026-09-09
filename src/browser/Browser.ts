@@ -409,6 +409,8 @@ export class BrowserController {
           "доступ к сервису ограничен",
           "показалось подозрительным",
           "слишком много запросов",
+          "antibot",
+          "challenge page",
           "verify you are human",
           "are you a robot",
           "i'm not a robot",
