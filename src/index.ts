@@ -6,12 +6,13 @@ import { Agent } from "./agent/Agent.js";
 import { TerminalUI } from "./ui/terminal.js";
 import { createProvider } from "./llm/index.js";
 
-function parseArgs(argv: string[]): { task?: string } {
-  const out: { task?: string } = {};
+function parseArgs(argv: string[]): { task?: string; keepOpen?: boolean } {
+  const out: { task?: string; keepOpen?: boolean } = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--record") process.env.RECORD_VIDEO = "1";
     else if (a === "--headless") process.env.HEADLESS = "1";
+    else if (a === "--keep-open") out.keepOpen = true;
     else if (a === "--task") out.task = argv[++i];
     else if (!a.startsWith("--")) out.task = (out.task ? out.task + " " : "") + a;
   }
@@ -72,6 +73,10 @@ async function main(): Promise<void> {
       const icon = result.status === "success" ? "✅" : result.status === "partial" ? "🟡" : "❌";
       console.log(chalk.bold(`\n${icon} ${result.status.toUpperCase()}`));
       console.log(result.summary);
+      // The browser stays where the agent left it - say so, it is often the
+      // page the user wants to look at or continue from.
+      console.log(chalk.dim(`\n🌐 Браузер открыт на: ${browser.page.url()}`));
+      console.log(chalk.dim("   Можно дать следующую задачу — агент продолжит с этой страницы."));
     } catch (err) {
       console.log(chalk.red(`\n❌ Agent error: ${(err as Error).message}`));
     }
@@ -83,7 +88,12 @@ async function main(): Promise<void> {
     );
   };
 
-  if (args.task) await runOne(args.task);
+  if (args.task) {
+    await runOne(args.task);
+    if (args.keepOpen) {
+      await ui.askUser("Задача завершена. Нажмите Enter, чтобы закрыть браузер, или дайте следующую задачу.");
+    }
+  }
 
   while (true) {
     const line = (await ui.prompt()).trim();
