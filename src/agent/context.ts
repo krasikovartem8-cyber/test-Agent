@@ -27,12 +27,14 @@ export class ContextManager {
   turns = 0;
   compactions = 0;
   private recentCalls: string[] = [];
+  private recentNames: string[] = [];
 
   constructor(private llm: LLMProvider) {}
 
   startTask(task: string): void {
     this.task = task;
     this.recentCalls = [];
+    this.recentNames = [];
     this.billedTokens = 0;
     this.turns = 0;
     this.llm.addUserText(task);
@@ -43,6 +45,7 @@ export class ContextManager {
     this.notes = [];
     this.contextTokens = 0;
     this.recentCalls = [];
+    this.recentNames = [];
   }
 
   recordUsage(contextTokens: number): void {
@@ -64,9 +67,17 @@ export class ContextManager {
     if (name === "wait" || name === "scroll" || name === "get_page_state" || name === "screenshot") return false;
     const sig = name + JSON.stringify(input);
     this.recentCalls.push(sig);
+    this.recentNames.push(name);
     if (this.recentCalls.length > 6) this.recentCalls.shift();
+    if (this.recentNames.length > 6) this.recentNames.shift();
+
     const n = this.recentCalls.length;
-    return n >= 3 && this.recentCalls[n - 1] === sig && this.recentCalls[n - 2] === sig && this.recentCalls[n - 3] === sig;
+    const identical = n >= 3 && this.recentCalls.slice(-3).every((s) => s === sig);
+    // Also catch rephrased repetition: the same tool four times running, e.g.
+    // asking the sub-agent the same question in slightly different words.
+    const m = this.recentNames.length;
+    const sameTool = m >= 4 && this.recentNames.slice(-4).every((t) => t === name);
+    return identical || sameTool;
   }
 
   /** Summarize everything so far and restart the history from the summary. */

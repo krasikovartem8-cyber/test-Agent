@@ -128,8 +128,16 @@ export function collectSnapshot(opts: SnapshotOptions): PageSnapshot {
     seen.add(el);
     const rect = visibleRect(el);
     if (!rect) continue;
-    // A <label> that wraps a control is redundant with the control itself.
-    if (el.tagName === "LABEL" && el.querySelector("input,select,textarea")) continue;
+    // A <label> tied to a control we also list is noise: it duplicates the
+    // control's name and invites clicks that cannot do anything useful.
+    if (el.tagName === "LABEL") {
+      const forId = el.getAttribute("for");
+      const linked =
+        (forId && document.getElementById(forId)) ||
+        el.querySelector("input,select,textarea") ||
+        el.parentElement?.querySelector("input,select,textarea");
+      if (linked) continue;
+    }
 
     ref++;
     el.setAttribute("data-ba-ref", String(ref));

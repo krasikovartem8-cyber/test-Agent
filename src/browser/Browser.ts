@@ -241,8 +241,40 @@ export class BrowserController {
     return { message: `Hovered ${this.describeRef(ref)}.` + this.drainEvents() };
   }
 
-  async type(ref: number, text: string, opts: { clear?: boolean; pressEnter?: boolean }): Promise<ActionOutcome> {
+  /**
+   * Sites often expose a filter as a <label> wrapping or preceding the real
+   * <input>, and the model naturally picks the labelled element. Typing into a
+   * label can never work, so resolve it to the control it belongs to.
+   */
+  private async resolveEditable(ref: number): Promise<Locator> {
     const loc = await this.ensureRef(ref);
+    const alreadyEditable = await loc.evaluate(
+      (el) => el.tagName === "INPUT" || el.tagName === "TEXTAREA" || (el as HTMLElement).isContentEditable,
+    );
+    if (alreadyEditable) return loc;
+
+    const found = await loc.evaluate((el) => {
+      const editable = (c: Element | null | undefined): Element | null =>
+        c && (c.tagName === "INPUT" || c.tagName === "TEXTAREA" || (c as HTMLElement).isContentEditable) ? c : null;
+
+      let target: Element | null = null;
+      if (el.tagName === "LABEL") {
+        const forId = el.getAttribute("for");
+        if (forId) target = editable(document.getElementById(forId));
+        if (!target) target = editable(el.querySelector("input, textarea, [contenteditable='true']"));
+        if (!target) target = editable(el.parentElement?.querySelector("input, textarea, [contenteditable='true']"));
+      }
+      if (!target) target = editable(el.querySelector("input, textarea, [contenteditable='true']"));
+      if (!target) return false;
+      document.querySelectorAll("[data-ba-typing]").forEach((n) => n.removeAttribute("data-ba-typing"));
+      target.setAttribute("data-ba-typing", "1");
+      return true;
+    });
+    return found ? this.active.locator('[data-ba-typing="1"]').first() : loc;
+  }
+
+  async type(ref: number, text: string, opts: { clear?: boolean; pressEnter?: boolean }): Promise<ActionOutcome> {
+    const loc = await this.resolveEditable(ref);
     await loc.scrollIntoViewIfNeeded({ timeout: 3_000 }).catch(() => {});
     const clear = opts.clear ?? true;
     const isEditable = await loc.evaluate((el) => {
