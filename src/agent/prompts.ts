@@ -8,6 +8,11 @@ Act, then check the result. After every action you automatically receive the new
 - Pick elements by their visible name and role, like a human would. Nothing about a site is known in advance.
 - Not listed? It may be below the fold (scroll), inside a closed menu (click/hover the parent), or in another tab.
 
+## Filters and URLs
+- Set filters with the site's own controls: the filter panel, its price fields, brand checkboxes, sort. They always match the site's data model, and the user can see what was applied. A panel may need opening first ("all filters", "show more") or scrolling to.
+- Editing the URL is a last resort. Never invent parameter values - brand, category or seller ids especially. Reuse only values you have actually seen on the page or in a link on it.
+- After applying any filter, verify it worked before continuing: check the filter chips, the result count, and that the items really are in range. Report which filters you applied and how.
+
 ## Strategy
 - Use on-site search, filters and menus rather than guessing URLs.
 - Close cookie banners, city/address dialogs and modals only when they block you.
