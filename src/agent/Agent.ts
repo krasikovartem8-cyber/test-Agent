@@ -344,8 +344,12 @@ export class Agent {
         return { text: `[chars ${offset}-${offset + chunk.length} of ${full.length}${rest > 0 ? `, ${rest} remaining` : ""}]\n${chunk}` };
       }
       case "query_page": {
-        // Always read the live page so the sub-agent sees the current state.
-        const snap = await b.snapshot();
+        // Reuse the snapshot the agent is already looking at. Taking a new one
+        // renumbers every element, so the refs the sub-agent cites would not
+        // match the page state the agent just received - which is how it ends
+        // up typing into the wrong field.
+        const last = b.getLastSnapshot();
+        const snap = last && last.url === b.page.url() ? last : await b.snapshot();
         const answer = await queryPage(this.llm, String(input.question), snap);
         this.ui.subagentAnswer(answer);
         return { text: `DOM sub-agent answer (refs refer to the page as it is right now):\n${answer}` };

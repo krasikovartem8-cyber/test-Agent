@@ -17,6 +17,18 @@ import { LLMTooLargeError, type LLMProvider } from "../llm/types.js";
  * (small context window, or a per-minute token budget on free tiers) the
  * document is halved and the question retried.
  */
+/**
+ * Some open-weight models write their reasoning into the reply inside <think>
+ * tags. It is long, in the wrong language, and pure cost for the main agent.
+ */
+function stripReasoning(answer: string): string {
+  const cleaned = answer
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/^[\s\S]*?<\/think>/i, "")
+    .trim();
+  return cleaned || answer.trim();
+}
+
 export async function queryPage(llm: LLMProvider, question: string, snapshot: PageSnapshot): Promise<string> {
   let maxElements = config.subagentMaxElements;
   let maxChars = config.subagentTextChars;
@@ -32,7 +44,12 @@ export async function queryPage(llm: LLMProvider, question: string, snapshot: Pa
       `VISIBLE PAGE TEXT:\n${snapshot.text.slice(0, maxChars)}`;
 
     try {
-      return await llm.complete(SUBAGENT_SYSTEM_PROMPT, pageDoc, `Question: ${question}`, "low");
+      const ask = attempt === 0 ? `Question: ${question}` : `Question: ${question}\n\nAnswer directly in one or two sentences. Do not write any reasoning, and never emit <think> blocks.`;
+      const answer = stripReasoning(await llm.complete(SUBAGENT_SYSTEM_PROMPT, pageDoc, ask, "low"));
+      // An unclosed <think> means the reply was cut off mid-reasoning: no answer
+      // came back at all, so ask again for the answer alone.
+      if (/<think>/i.test(answer) && attempt < 2) continue;
+      return answer.replace(/<\/?think>/gi, "").trim();
     } catch (err) {
       if (err instanceof LLMTooLargeError && attempt < 3) {
         maxElements = Math.max(60, Math.floor(maxElements / 2));
