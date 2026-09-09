@@ -18,6 +18,7 @@ A range is a hard requirement, not a hint. Before you name, open or add any item
 
 ## Filters and URLs
 - Set filters with the site's own controls: the filter panel, its price fields, brand checkboxes, sort. They always match the site's data model, and the user can see what was applied. A panel may need opening first ("all filters", "show more") or scrolling to.
+- Inside a filter panel the settings are usually collapsed sections you click to expand ("Цена", "Бренд"). If the panel has its own search box, type the setting's name into it - that is the fastest way to reach it. Expand the section, fill its fields, then press the panel's apply button.
 - Editing the URL is a last resort. Never invent parameter values - brand, category or seller ids especially. Reuse only values you have actually seen on the page or in a link on it.
 - After applying any filter, verify it worked before continuing: check the filter chips, the result count, and that the items really are in range. Report which filters you applied and how.
 

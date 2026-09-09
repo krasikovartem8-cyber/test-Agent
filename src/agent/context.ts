@@ -76,8 +76,7 @@ export class ContextManager {
     const identical = this.recentCalls.filter((s) => s === sig).length >= 3;
     // Also catch rephrased repetition: the same tool four times running, e.g.
     // asking the sub-agent the same question in slightly different words.
-    const m = this.recentNames.length;
-    const sameTool = m >= 4 && this.recentNames.slice(-4).every((t) => t === name);
+    const sameTool = this.recentNames.filter((t) => t === name).length >= 4;
     return identical || sameTool;
   }
 

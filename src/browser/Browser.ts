@@ -270,7 +270,12 @@ export class BrowserController {
       target.setAttribute("data-ba-typing", "1");
       return true;
     });
-    return found ? this.active.locator('[data-ba-typing="1"]').first() : loc;
+    if (found) return this.active.locator('[data-ba-typing="1"]').first();
+    // Typing into a button "succeeds" silently and the agent believes the field
+    // is filled. Fail loudly instead, naming what was targeted.
+    throw new Error(
+      `${this.describeRef(ref)} is not a text field and has none inside it. Take a fresh get_page_state and pick the <input> itself.`,
+    );
   }
 
   async type(ref: number, text: string, opts: { clear?: boolean; pressEnter?: boolean }): Promise<ActionOutcome> {
@@ -335,15 +340,29 @@ export class BrowserController {
       await loc.hover({ timeout: 3_000 }).catch(() => {});
       await this.active.mouse.wheel(dx, dy);
     } else {
-      await this.active.mouse.move(config.viewport.width / 2, vh / 2);
-      await this.active.mouse.wheel(dx, dy);
+      // With a dialog open the wheel often goes to the page behind it, so
+      // scroll the dialog's own container when the snapshot found one.
+      const scrolledDialog = await this.active.evaluate(
+        ({ dx, dy }) => {
+          const el = document.querySelector("[data-ba-scroll]");
+          if (!el) return false;
+          const before = el.scrollTop;
+          el.scrollBy({ left: dx, top: dy, behavior: "instant" as ScrollBehavior });
+          return el.scrollTop !== before || dy === 0;
+        },
+        { dx, dy },
+      );
+      if (!scrolledDialog) {
+        await this.active.mouse.move(config.viewport.width / 2, vh / 2);
+        await this.active.mouse.wheel(dx, dy);
+      }
     }
     await this.active.waitForTimeout(500);
-    const pos = await this.active.evaluate(() => ({
-      y: Math.round(window.scrollY),
-      h: document.documentElement.scrollHeight,
-      vh: window.innerHeight,
-    }));
+    const pos = await this.active.evaluate(() => {
+      const el = document.querySelector("[data-ba-scroll]");
+      if (el) return { y: Math.round(el.scrollTop), h: el.scrollHeight, vh: el.clientHeight };
+      return { y: Math.round(window.scrollY), h: document.documentElement.scrollHeight, vh: window.innerHeight };
+    });
     const atBottom = pos.y + pos.vh >= pos.h - 5;
     return {
       message:

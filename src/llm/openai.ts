@@ -31,9 +31,14 @@ function toOpenAITools(tools: Anthropic.Tool[], strictSupported: boolean): OpenA
     }));
 }
 
-/** Only OpenAI's own reasoning models accept `reasoning_effort`. */
+/**
+ * `reasoning_effort` is accepted by OpenAI's own reasoning models and by the
+ * open-weight reasoning models served on Groq. Gateways that dislike it answer
+ * 400, and the caller then retries without it.
+ */
 function supportsReasoning(model: string): boolean {
-  return !config.openaiBaseURL && /^(gpt-5|o\d)/.test(model);
+  if (!config.openaiBaseURL) return /^(gpt-5|o\d)/.test(model);
+  return /groq\.com/.test(config.openaiBaseURL) && /gpt-oss|qwen3/i.test(model);
 }
 
 /**
@@ -51,6 +56,7 @@ export class OpenAIProvider implements LLMProvider {
   private subagentFallbacks = [...config.openaiFallbackModels];
   /** Free tiers cap output tokens per minute; we discover the ceiling at runtime. */
   private maxTokens = config.maxOutputTokens;
+  private useReasoningEffort = true;
 
   get model(): string {
     return this.currentModel;
@@ -79,11 +85,16 @@ export class OpenAIProvider implements LLMProvider {
           stream: true,
           stream_options: { include_usage: true },
           max_completion_tokens: this.maxTokens,
-          ...(supportsReasoning(this.model) ? { reasoning_effort: config.effort } : {}),
+          ...(this.useReasoningEffort && supportsReasoning(this.model) ? { reasoning_effort: config.effort } : {}),
         });
       } catch (err) {
         const msg = (err as Error).message ?? "";
         if (attempt < 4 && isOutputCeilingError(err) && this.lowerOutputCeiling(msg)) continue;
+        // Some gateways reject the parameter for some models; drop it and retry.
+        if (attempt < 4 && this.useReasoningEffort && /reasoning_effort/i.test(msg)) {
+          this.useReasoningEffort = false;
+          continue;
+        }
         throw err;
       }
     }
@@ -247,7 +258,7 @@ export class OpenAIProvider implements LLMProvider {
             { role: "user", content: `${doc}\n\n${question}` },
           ],
           max_completion_tokens: maxTokens,
-          ...(supportsReasoning(this.currentSubagentModel) ? { reasoning_effort: effort } : {}),
+          ...(this.useReasoningEffort && supportsReasoning(this.currentSubagentModel) ? { reasoning_effort: effort } : {}),
         });
         return (response.choices[0]?.message.content ?? "").trim();
       } catch (err) {

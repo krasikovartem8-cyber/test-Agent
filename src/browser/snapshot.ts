@@ -114,6 +114,35 @@ export function collectSnapshot(opts: SnapshotOptions): PageSnapshot {
   if (modal) collect(modal);
   else collect(document);
 
+  /**
+   * React-style sites attach click handlers in JavaScript, so a clickable
+   * <div> matches no selector and stays invisible to the agent - which is how
+   * collapsed filter sections ("Цена", "Бренд") go missing. The one honest
+   * signal left in the DOM is the pointer cursor. Take only leaf-ish elements
+   * with short text so the list does not fill up with wrappers.
+   */
+  const pointerRoot: ParentNode = modal ?? document;
+  const pointerHits = new Set<Element>();
+  for (const el of Array.from(pointerRoot.querySelectorAll<HTMLElement>("div, span, li, p, h1, h2, h3, h4, section, article"))) {
+    if (candidates.length > 2500) break;
+    if (el.querySelector(INTERACTIVE)) continue; // an inner control is the real target
+    if (el.closest(INTERACTIVE)) continue; // inside a button/link we already list
+    const text = (el.innerText ?? "").trim();
+    if (!text || text.length > 60) continue;
+    if (window.getComputedStyle(el).cursor !== "pointer") continue;
+    // Nested wrappers repeat the same label; keep the outermost one only.
+    let redundant = false;
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (pointerHits.has(p) && (p.innerText ?? "").trim() === text) {
+        redundant = true;
+        break;
+      }
+    }
+    if (redundant) continue;
+    pointerHits.add(el);
+    candidates.push(el);
+  }
+
   const visibleRect = (el: Element): DOMRect | null => {
     const style = window.getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
@@ -242,15 +271,43 @@ export function collectSnapshot(opts: SnapshotOptions): PageSnapshot {
     ? clean(modal.getAttribute("aria-label") || modal.querySelector("h1, h2, [role='heading']")?.textContent || "dialog", 60)
     : undefined;
 
+  /**
+   * A dialog usually scrolls inside itself, so the page's scroll position says
+   * nothing about how much of it is left. Report the dialog's own scrollbar -
+   * otherwise the agent believes it has seen everything after one screen.
+   */
+  const modalScroll = (): { y: number; pageHeight: number; viewportHeight: number } | null => {
+    if (!modal) return null;
+    const boxes: Element[] = [modal, ...Array.from(modal.querySelectorAll("*"))];
+    let best: Element | null = null;
+    let bestOverflow = 0;
+    for (const el of boxes) {
+      const overflow = el.scrollHeight - el.clientHeight;
+      if (overflow > 40 && el.clientHeight > 100 && overflow > bestOverflow) {
+        const style = window.getComputedStyle(el);
+        if (/auto|scroll/.test(style.overflowY)) {
+          best = el;
+          bestOverflow = overflow;
+        }
+      }
+    }
+    if (!best) return null;
+    // Tag it so scrolling can target the dialog instead of the page behind it.
+    document.querySelectorAll("[data-ba-scroll]").forEach((n) => n.removeAttribute("data-ba-scroll"));
+    best.setAttribute("data-ba-scroll", "1");
+    return { y: Math.round(best.scrollTop), pageHeight: best.scrollHeight, viewportHeight: best.clientHeight };
+  };
+  const scroll = modalScroll() ?? {
+    y: Math.round(window.scrollY),
+    pageHeight: document.documentElement.scrollHeight,
+    viewportHeight: vh,
+  };
+
   return {
     url: location.href,
     title: document.title,
     modal: modalName,
-    scroll: {
-      y: Math.round(window.scrollY),
-      pageHeight: document.documentElement.scrollHeight,
-      viewportHeight: vh,
-    },
+    scroll,
     elements: limited,
     totalInteractive,
     text: rawText.slice(0, opts.maxTextChars),
@@ -290,7 +347,10 @@ export function formatSnapshot(s: PageSnapshot, textChars: number, maxElements: 
   lines.push("URL: " + (s.url.length > 140 ? s.url.slice(0, 140) + "…" : s.url));
   lines.push("Title: " + s.title);
   if (s.modal) {
-    lines.push(`A modal dialog is open ("${s.modal}"). Only its controls are listed and only they are clickable; close it to reach the page behind.`);
+    lines.push(
+      `A modal dialog is open ("${s.modal}"). Only its controls are listed and only they are clickable; close it to reach the page behind.` +
+        ` The scroll position below is the dialog's own: it scrolls internally, so use scroll down to reveal the rest of its controls (collapsed sections and inputs appear as you go).`,
+    );
   }
   const screens = Math.max(1, Math.ceil(s.scroll.pageHeight / Math.max(1, s.scroll.viewportHeight)));
   const cur = Math.min(screens, Math.floor(s.scroll.y / Math.max(1, s.scroll.viewportHeight)) + 1);

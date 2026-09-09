@@ -344,13 +344,21 @@ export class Agent {
         return { text: `[chars ${offset}-${offset + chunk.length} of ${full.length}${rest > 0 ? `, ${rest} remaining` : ""}]\n${chunk}` };
       }
       case "query_page": {
+        // A keyword is not a question: the sub-agent answers something unrelated
+        // and the agent burns a turn. Make the contract explicit.
+        const question = String(input.question ?? "").trim();
+        if (question.length < 15 || !/\s/.test(question)) {
+          throw new Error(
+            `"${question}" is not a question. Ask a full one naming what you look for and what you need back, e.g. "Где поля ввода минимальной и максимальной цены и какие у них ref?"`,
+          );
+        }
         // Reuse the snapshot the agent is already looking at. Taking a new one
         // renumbers every element, so the refs the sub-agent cites would not
         // match the page state the agent just received - which is how it ends
         // up typing into the wrong field.
         const last = b.getLastSnapshot();
         const snap = last && last.url === b.page.url() ? last : await b.snapshot();
-        const answer = await queryPage(this.llm, String(input.question), snap);
+        const answer = await queryPage(this.llm, question, snap);
         this.ui.subagentAnswer(answer);
         return { text: `DOM sub-agent answer (refs refer to the page as it is right now):\n${answer}` };
       }
