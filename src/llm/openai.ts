@@ -45,19 +45,62 @@ function supportsReasoning(model: string): boolean {
  */
 export class OpenAIProvider implements LLMProvider {
   readonly name = config.openaiBaseURL ? `openai-compatible (${new URL(config.openaiBaseURL).host})` : "openai";
-  readonly subagentModel = config.openaiSubagentModel;
   private currentModel = config.openaiModel;
+  private currentSubagentModel = config.openaiSubagentModel;
   private fallbacks = [...config.openaiFallbackModels];
+  private subagentFallbacks = [...config.openaiFallbackModels];
+  /** Free tiers cap output tokens per minute; we discover the ceiling at runtime. */
+  private maxTokens = config.maxOutputTokens;
 
   get model(): string {
     return this.currentModel;
+  }
+
+  get subagentModel(): string {
+    return this.currentSubagentModel;
   }
 
   switchModel(): string | null {
     const next = this.fallbacks.shift();
     if (!next) return null;
     this.currentModel = next;
+    this.maxTokens = config.maxOutputTokens; // a new model may allow more
     return next;
+  }
+
+  /** Start the streamed completion, backing off the output ceiling if the gateway caps it. */
+  private async openStream() {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.client.chat.completions.create({
+          model: this.model,
+          messages: [{ role: "system", content: SYSTEM_PROMPT }, ...this.messages],
+          tools: this.tools,
+          stream: true,
+          stream_options: { include_usage: true },
+          max_completion_tokens: this.maxTokens,
+          ...(supportsReasoning(this.model) ? { reasoning_effort: config.effort } : {}),
+        });
+      } catch (err) {
+        const msg = (err as Error).message ?? "";
+        if (attempt < 4 && isOutputCeilingError(err) && this.lowerOutputCeiling(msg)) continue;
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Gateways reject a request whose *requested* output size exceeds a
+   * per-minute output budget ("reduce max_tokens"). Lower our ceiling to what
+   * the error reports and keep it for later calls. Returns false when there is
+   * no more room to give.
+   */
+  private lowerOutputCeiling(message: string): boolean {
+    const limit = Number(/limit[: ]+(\d+)/i.exec(message)?.[1]);
+    const target = Number.isFinite(limit) && limit > 0 ? Math.max(256, limit - 64) : Math.floor(this.maxTokens / 2);
+    if (target >= this.maxTokens) return false;
+    this.maxTokens = target;
+    return this.maxTokens >= 256;
   }
   private client = new OpenAI({ baseURL: config.openaiBaseURL || undefined, timeout: 120_000 });
   private tools = toOpenAITools(TOOLS, !config.openaiBaseURL);
@@ -116,15 +159,7 @@ export class OpenAIProvider implements LLMProvider {
     let usage: OpenAI.CompletionUsage | undefined;
 
     try {
-      const stream = await this.client.chat.completions.create({
-        model: this.model,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...this.messages],
-        tools: this.tools,
-        stream: true,
-        stream_options: { include_usage: true },
-        max_completion_tokens: 16_000,
-        ...(supportsReasoning(this.model) ? { reasoning_effort: config.effort } : {}),
-      });
+      const stream = await this.openStream();
       for await (const chunk of stream) {
         if (chunk.usage) usage = chunk.usage;
         const choice = chunk.choices[0];
@@ -202,21 +237,49 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async complete(system: string, doc: string, question: string, effort: Effort): Promise<string> {
-    try {
-      const response = await this.client.chat.completions.create({
-        model: this.subagentModel,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: `${doc}\n\n${question}` },
-        ],
-        max_completion_tokens: 4000,
-        ...(supportsReasoning(this.subagentModel) ? { reasoning_effort: effort } : {}),
-      });
-      return (response.choices[0]?.message.content ?? "").trim();
-    } catch (err) {
-      throw mapError(err);
+    let maxTokens = Math.min(4000, this.maxTokens);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await this.client.chat.completions.create({
+          model: this.currentSubagentModel,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: `${doc}\n\n${question}` },
+          ],
+          max_completion_tokens: maxTokens,
+          ...(supportsReasoning(this.currentSubagentModel) ? { reasoning_effort: effort } : {}),
+        });
+        return (response.choices[0]?.message.content ?? "").trim();
+      } catch (err) {
+        const msg = (err as Error).message ?? "";
+        if (attempt < 4 && isOutputCeilingError(err)) {
+          const limit = Number(/limit[: ]+(\d+)/i.exec(msg)?.[1]);
+          const next = Number.isFinite(limit) && limit > 0 ? Math.max(256, limit - 64) : Math.floor(maxTokens / 2);
+          if (next < maxTokens && next >= 256) {
+            maxTokens = next;
+            continue;
+          }
+        }
+        // The sub-agent has its own daily quota; move it to the next spare model.
+        const mapped = mapError(err);
+        if (attempt < 4 && mapped instanceof LLMDailyLimitError) {
+          const next = this.subagentFallbacks.shift();
+          if (next && next !== this.currentSubagentModel) {
+            this.currentSubagentModel = next;
+            continue;
+          }
+        }
+        throw mapped;
+      }
     }
   }
+}
+
+/** "reduce max_tokens": the gateway caps how much output one request may ask for. */
+function isOutputCeilingError(err: unknown): boolean {
+  const status = (err as { status?: number }).status;
+  const message = (err as Error).message ?? "";
+  return (status === 429 || status === 400) && /output tokens per minute|\bOTPM\b|reduce max_tokens|expected output/i.test(message);
 }
 
 function mapError(err: unknown): Error {

@@ -25,6 +25,8 @@ export const config = {
    * Models to fall back to when the current one runs out of daily quota.
    * Free tiers meter each model separately, so switching keeps a run alive.
    */
+  /** Upper bound on one reply. Lowered automatically if the gateway caps it. */
+  maxOutputTokens: envInt("MAX_OUTPUT_TOKENS", 16_000),
   openaiFallbackModels: (process.env.OPENAI_FALLBACK_MODELS ?? "")
     .split(",")
     .map((m) => m.trim())
