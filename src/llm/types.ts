@@ -34,6 +34,8 @@ export interface TurnCallbacks {
 export class LLMTransientError extends Error {}
 /** Thrown for bad credentials. */
 export class LLMAuthError extends Error {}
+/** The request exceeded the model's context or a per-minute token limit. */
+export class LLMTooLargeError extends Error {}
 
 /**
  * A model provider owns the conversation history in its native format, so the
@@ -51,6 +53,12 @@ export interface LLMProvider {
   addToolResults(results: ToolOutcome[], note?: string): void;
   /** Drop the whole history. */
   reset(): void;
+  /**
+   * Shrink oversized tool results already in the history so a too-large
+   * request can be retried. Returns false when the provider cannot edit its
+   * history safely (Anthropic binds thinking blocks to the exact prefix).
+   */
+  trimHistory(maxCharsPerResult: number): boolean;
   /** Run one model turn over the current history and append the assistant reply. */
   turn(cb: TurnCallbacks): Promise<TurnResult>;
   /** Plain-text transcript of the history (for compaction). */

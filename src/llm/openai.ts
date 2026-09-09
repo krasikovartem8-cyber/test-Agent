@@ -3,7 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { config, type Effort } from "../config.js";
 import { SYSTEM_PROMPT } from "../agent/prompts.js";
 import { TOOLS } from "../agent/tools.js";
-import { LLMAuthError, LLMTransientError, type LLMProvider, type ToolOutcome, type TurnCallbacks, type TurnResult } from "./types.js";
+import { LLMAuthError, LLMTooLargeError, LLMTransientError, type LLMProvider, type ToolOutcome, type TurnCallbacks, type TurnResult } from "./types.js";
 
 type Msg = OpenAI.Chat.ChatCompletionMessageParam;
 
@@ -68,6 +68,18 @@ export class OpenAIProvider implements LLMProvider {
     this.messages = [];
   }
 
+  /** Truncate long tool results (page snapshots are by far the biggest). */
+  trimHistory(maxCharsPerResult: number): boolean {
+    let changed = false;
+    for (const m of this.messages) {
+      if (m.role !== "tool" || typeof m.content !== "string") continue;
+      if (m.content.length <= maxCharsPerResult) continue;
+      m.content = m.content.slice(0, maxCharsPerResult) + "\n…[older observation trimmed to save context; take a fresh get_page_state if you need it]";
+      changed = true;
+    }
+    return changed;
+  }
+
   async turn(cb: TurnCallbacks): Promise<TurnResult> {
     let text = "";
     const calls = new Map<number, { id: string; name: string; args: string }>();
@@ -92,6 +104,11 @@ export class OpenAIProvider implements LLMProvider {
           text += choice.delta.content;
           cb.onText(choice.delta.content);
         }
+        // Reasoning models behind OpenAI-compatible gateways (gpt-oss on Groq,
+        // DeepSeek R1, …) stream their thinking in a non-standard field.
+        const reasoning = (choice.delta as { reasoning?: string; reasoning_content?: string }).reasoning ??
+          (choice.delta as { reasoning_content?: string }).reasoning_content;
+        if (reasoning) cb.onThinking(reasoning);
         for (const tc of choice.delta.tool_calls ?? []) {
           const cur = calls.get(tc.index) ?? { id: "", name: "", args: "" };
           if (tc.id) cur.id = tc.id;
@@ -175,6 +192,10 @@ export class OpenAIProvider implements LLMProvider {
 
 function mapError(err: unknown): Error {
   if (err instanceof OpenAI.AuthenticationError) return new LLMAuthError("OpenAI API authentication failed - check OPENAI_API_KEY.");
+  const status = (err as { status?: number }).status;
+  // 413 on OpenAI-compatible gateways: over the context window, or over a
+  // per-minute token budget that a single request cannot satisfy.
+  if (status === 413) return new LLMTooLargeError((err as Error).message.split("\n")[0]);
   if (err instanceof OpenAI.RateLimitError || err instanceof OpenAI.APIConnectionError || err instanceof OpenAI.InternalServerError) {
     return new LLMTransientError((err as Error).message.split("\n")[0]);
   }

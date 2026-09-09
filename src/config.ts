@@ -39,4 +39,8 @@ export const config = {
   snapshotTextChars: envInt("SNAPSHOT_TEXT_CHARS", 2500),
   /** Chars of page text handed to the DOM sub-agent. */
   subagentTextChars: envInt("SUBAGENT_TEXT_CHARS", 80_000),
+  /** Interactive elements handed to the DOM sub-agent. */
+  subagentMaxElements: envInt("SUBAGENT_MAX_ELEMENTS", 600),
+  /** Chars of transcript handed to the summarizer during compaction. */
+  transcriptChars: envInt("TRANSCRIPT_CHARS", 40_000),
 };

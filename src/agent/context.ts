@@ -63,7 +63,10 @@ export class ContextManager {
 
   /** Summarize everything so far and restart the history from the summary. */
   async compact(currentUrl: string): Promise<string> {
-    const transcript = this.llm.transcript();
+    // Keep the tail: the summarizer runs on the cheaper model, which may have a
+    // much smaller context (or a per-minute token budget) than the main one.
+    const full = this.llm.transcript();
+    const transcript = full.length > config.transcriptChars ? "…[earlier steps omitted]\n" + full.slice(-config.transcriptChars) : full;
     const summary = await this.llm.complete(compactionPrompt(this.task, this.notes), `TRANSCRIPT:\n${transcript}`, "Write the progress summary now.", "medium");
 
     this.compactions++;

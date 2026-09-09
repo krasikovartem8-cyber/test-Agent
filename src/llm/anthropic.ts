@@ -40,6 +40,15 @@ export class AnthropicProvider implements LLMProvider {
     this.messages = [];
   }
 
+  /**
+   * Not supported: a thinking block's signature covers every earlier message,
+   * so rewriting a past tool result invalidates the rest of the conversation.
+   * The agent falls back to compaction instead.
+   */
+  trimHistory(): boolean {
+    return false;
+  }
+
   async turn(cb: TurnCallbacks): Promise<TurnResult> {
     let message: Anthropic.Message;
     try {

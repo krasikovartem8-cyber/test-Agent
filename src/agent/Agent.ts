@@ -3,7 +3,7 @@ import { BrowserController } from "../browser/Browser.js";
 import { formatSnapshot } from "../browser/snapshot.js";
 import { ContextManager } from "./context.js";
 import { queryPage } from "./subagent.js";
-import { LLMAuthError, LLMTransientError, type LLMProvider, type ToolOutcome, type TurnResult } from "../llm/types.js";
+import { LLMAuthError, LLMTooLargeError, LLMTransientError, type LLMProvider, type ToolOutcome, type TurnResult } from "../llm/types.js";
 import type { AgentUI } from "../ui/types.js";
 
 export interface TaskResult {
@@ -33,6 +33,8 @@ export class Agent {
   async runTask(task: string): Promise<TaskResult> {
     this.ctx.startTask(task);
     let steps = 0;
+    let emptyTurns = 0;
+    let textOnlyTurns = 0;
 
     while (true) {
       if (steps >= config.maxSteps) {
@@ -52,9 +54,27 @@ export class Agent {
         continue;
       }
       if (turn.toolCalls.length === 0) {
-        // Model ended its turn with text only: treat it as the final report.
-        return { status: "partial", summary: turn.text || "(no report)" };
+        // An empty turn (no text, no tool call) happens with some models -
+        // nudge instead of silently ending the task with nothing.
+        if (!turn.text) {
+          if (emptyTurns++ < 3) {
+            this.llm.addUserText("You returned an empty turn. Call a tool to continue the task, or call finish with your report.");
+            continue;
+          }
+          return { status: "failed", summary: "The model stopped returning actions (three empty turns in a row)." };
+        }
+        // Text without a tool call. Ask once for a proper finish so the status
+        // (success / partial / failed) comes from the model, not a guess.
+        if (textOnlyTurns++ < 1) {
+          this.llm.addUserText(
+            "Answer received. Now call the finish tool with status and summary so the task is formally closed, or keep working if anything is left.",
+          );
+          continue;
+        }
+        return { status: "partial", summary: turn.text };
       }
+      emptyTurns = 0;
+      textOnlyTurns = 0;
 
       const results: ToolOutcome[] = [];
       let finished: TaskResult | null = null;
@@ -100,9 +120,29 @@ export class Agent {
     }
   }
 
+  /**
+   * Shrink what the agent observes so requests fit a smaller model or a
+   * per-minute token budget. Applied when the API rejects a request as too
+   * large, so a run adapts instead of dying.
+   */
+  private shrinkObservations(): boolean {
+    const before = config.snapshotMaxElements + config.snapshotTextChars;
+    config.snapshotMaxElements = Math.max(35, Math.floor(config.snapshotMaxElements / 2));
+    config.snapshotTextChars = Math.max(500, Math.floor(config.snapshotTextChars / 2));
+    config.subagentTextChars = Math.max(4000, Math.floor(config.subagentTextChars / 2));
+    const changed = before !== config.snapshotMaxElements + config.snapshotTextChars;
+    if (changed) {
+      this.ui.warn(
+        `Request too large - reducing observations to ${config.snapshotMaxElements} elements / ${config.snapshotTextChars} chars of text.`,
+      );
+    }
+    return changed;
+  }
+
   /** One streamed model turn with retries on transient API errors. */
   private async modelTurn(): Promise<TurnResult> {
     let attempt = 0;
+    let tooLarge = 0;
     while (true) {
       try {
         const result = await this.llm.turn({
@@ -114,6 +154,17 @@ export class Agent {
       } catch (err) {
         this.ui.turnEnd();
         if (err instanceof LLMAuthError) throw err;
+        if (err instanceof LLMTooLargeError && tooLarge < 3) {
+          tooLarge++;
+          // Shrink future observations, then squeeze the ones already recorded.
+          this.shrinkObservations();
+          const trimmed = this.llm.trimHistory(Math.max(600, 3000 / tooLarge));
+          if (!trimmed) {
+            this.ui.info("Compacting the history so the request fits…");
+            await this.ctx.compact(this.browser.page.url());
+          }
+          continue;
+        }
         if (err instanceof LLMTransientError && attempt < 4) {
           attempt++;
           const delay = 3000 * attempt;

@@ -54,6 +54,9 @@ class FakeProvider implements LLMProvider {
   reset() {
     this.history = [];
   }
+  trimHistory() {
+    return false;
+  }
   async turn(cb: TurnCallbacks): Promise<TurnResult> {
     if (this.pendingIds.length) throw new Error("turn() called with unanswered tool calls");
     const s = script[this.step++] ?? { text: "Script exhausted." };
