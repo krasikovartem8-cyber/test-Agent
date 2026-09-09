@@ -36,6 +36,8 @@ export class LLMTransientError extends Error {}
 export class LLMAuthError extends Error {}
 /** The request exceeded the model's context or a per-minute token limit. */
 export class LLMTooLargeError extends Error {}
+/** The model's daily quota is spent; waiting will not help today. */
+export class LLMDailyLimitError extends Error {}
 
 /**
  * A model provider owns the conversation history in its native format, so the
@@ -59,6 +61,11 @@ export interface LLMProvider {
    * history safely (Anthropic binds thinking blocks to the exact prefix).
    */
   trimHistory(maxCharsPerResult: number, keepLast?: number): boolean;
+  /**
+   * Move to the next configured model after the current one runs out of quota.
+   * Returns the new model id, or null when there is nothing to fall back to.
+   */
+  switchModel(): string | null;
   /** Run one model turn over the current history and append the assistant reply. */
   turn(cb: TurnCallbacks): Promise<TurnResult>;
   /** Plain-text transcript of the history (for compaction). */

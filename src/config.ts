@@ -21,6 +21,14 @@ export const config = {
   openaiSubagentModel: process.env.OPENAI_SUBAGENT_MODEL ?? "gpt-5.4-mini",
   /** Any OpenAI-compatible endpoint (Groq, OpenRouter, Gemini compat, Ollama…). */
   openaiBaseURL: process.env.OPENAI_BASE_URL ?? "",
+  /**
+   * Models to fall back to when the current one runs out of daily quota.
+   * Free tiers meter each model separately, so switching keeps a run alive.
+   */
+  openaiFallbackModels: (process.env.OPENAI_FALLBACK_MODELS ?? "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean),
   /** Set VISION=0 for models that cannot read images: no screenshots are sent. */
   vision: process.env.VISION !== "0",
 

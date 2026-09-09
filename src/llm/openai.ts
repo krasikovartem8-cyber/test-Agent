@@ -3,7 +3,16 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { config, type Effort } from "../config.js";
 import { SYSTEM_PROMPT } from "../agent/prompts.js";
 import { TOOLS } from "../agent/tools.js";
-import { LLMAuthError, LLMTooLargeError, LLMTransientError, type LLMProvider, type ToolOutcome, type TurnCallbacks, type TurnResult } from "./types.js";
+import {
+  LLMAuthError,
+  LLMDailyLimitError,
+  LLMTooLargeError,
+  LLMTransientError,
+  type LLMProvider,
+  type ToolOutcome,
+  type TurnCallbacks,
+  type TurnResult,
+} from "./types.js";
 
 type Msg = OpenAI.Chat.ChatCompletionMessageParam;
 
@@ -36,8 +45,20 @@ function supportsReasoning(model: string): boolean {
  */
 export class OpenAIProvider implements LLMProvider {
   readonly name = config.openaiBaseURL ? `openai-compatible (${new URL(config.openaiBaseURL).host})` : "openai";
-  readonly model = config.openaiModel;
   readonly subagentModel = config.openaiSubagentModel;
+  private currentModel = config.openaiModel;
+  private fallbacks = [...config.openaiFallbackModels];
+
+  get model(): string {
+    return this.currentModel;
+  }
+
+  switchModel(): string | null {
+    const next = this.fallbacks.shift();
+    if (!next) return null;
+    this.currentModel = next;
+    return next;
+  }
   private client = new OpenAI({ baseURL: config.openaiBaseURL || undefined, timeout: 120_000 });
   private tools = toOpenAITools(TOOLS, !config.openaiBaseURL);
   private messages: Msg[] = [];
@@ -210,6 +231,11 @@ function mapError(err: unknown): Error {
   // asking again usually produces a valid call.
   if (status === 400 && /tool[_ ]call|arguments as JSON|failed to parse/i.test(message)) {
     return new LLMTransientError("model produced invalid tool-call JSON");
+  }
+  // A daily quota does not free up by waiting a few seconds - the caller has to
+  // switch models or come back tomorrow.
+  if (status === 429 && /per day|\bTPD\b|daily|quota/i.test(message)) {
+    return new LLMDailyLimitError(message.split("\n")[0]);
   }
   if (err instanceof OpenAI.RateLimitError || err instanceof OpenAI.APIConnectionError || err instanceof OpenAI.InternalServerError) {
     return new LLMTransientError((err as Error).message.split("\n")[0]);

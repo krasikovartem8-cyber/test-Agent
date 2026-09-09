@@ -49,6 +49,10 @@ export class AnthropicProvider implements LLMProvider {
     return false;
   }
 
+  switchModel(): string | null {
+    return null;
+  }
+
   async turn(cb: TurnCallbacks): Promise<TurnResult> {
     let message: Anthropic.Message;
     try {

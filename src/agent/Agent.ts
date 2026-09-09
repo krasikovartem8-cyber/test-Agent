@@ -3,7 +3,15 @@ import { BrowserController, shortUrl } from "../browser/Browser.js";
 import { formatSnapshot } from "../browser/snapshot.js";
 import { ContextManager } from "./context.js";
 import { queryPage } from "./subagent.js";
-import { LLMAuthError, LLMTooLargeError, LLMTransientError, type LLMProvider, type ToolOutcome, type TurnResult } from "../llm/types.js";
+import {
+  LLMAuthError,
+  LLMDailyLimitError,
+  LLMTooLargeError,
+  LLMTransientError,
+  type LLMProvider,
+  type ToolOutcome,
+  type TurnResult,
+} from "../llm/types.js";
 import type { AgentUI } from "../ui/types.js";
 
 export interface TaskResult {
@@ -199,6 +207,17 @@ export class Agent {
       } catch (err) {
         this.ui.turnEnd();
         if (err instanceof LLMAuthError) throw err;
+        if (err instanceof LLMDailyLimitError) {
+          const next = this.llm.switchModel();
+          if (!next) {
+            throw new Error(
+              `${err.message}\nThe daily quota for this model is spent. Set another model in .env (OPENAI_MODEL), ` +
+                `list spares in OPENAI_FALLBACK_MODELS so the agent switches by itself, or come back after the quota resets.`,
+            );
+          }
+          this.ui.warn(`Дневной лимит модели исчерпан — переключаюсь на ${next}.`);
+          continue;
+        }
         if (err instanceof LLMTooLargeError && tooLarge < 3) {
           tooLarge++;
           // Shrink future observations, then squeeze the ones already recorded.
