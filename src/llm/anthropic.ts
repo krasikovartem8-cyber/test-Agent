@@ -45,7 +45,7 @@ export class AnthropicProvider implements LLMProvider {
    * so rewriting a past tool result invalidates the rest of the conversation.
    * The agent falls back to compaction instead.
    */
-  trimHistory(): boolean {
+  trimHistory(_maxCharsPerResult: number, _keepLast?: number): boolean {
     return false;
   }
 

@@ -3,14 +3,17 @@ import type Anthropic from "@anthropic-ai/sdk";
 /**
  * Tool surface exposed to the model. Deliberately generic: nothing here knows
  * about any particular website. The model decides what to click, type and read.
+ *
+ * Descriptions are kept terse on purpose - they are re-sent on every request,
+ * so verbosity here is a per-turn tax on every task.
  */
 export const TOOLS: Anthropic.Tool[] = [
   {
     name: "navigate",
-    description: "Open a URL in the active tab. Use for the starting site of a task or when you know the exact address.",
+    description: "Open a URL in the active tab.",
     input_schema: {
       type: "object",
-      properties: { url: { type: "string", description: "Absolute URL, e.g. https://example.com" } },
+      properties: { url: { type: "string" } },
       required: ["url"],
       additionalProperties: false,
     },
@@ -19,30 +22,26 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_page_state",
     description:
-      "Observe the current page: URL, title, scroll position, a numbered list of visible interactive elements ([N] refs) and the beginning of the visible text. " +
-      "Call it after every action that may have changed the page, and before acting on any element: refs are only valid for the most recent snapshot. " +
-      "Set include_screenshot=true when layout matters (modals, maps, images, unclear state).",
+      "Observe the page: URL, numbered interactive elements [N] and the start of the visible text. You already get this after every action, so call it only for a fresh or fuller view.",
     input_schema: {
       type: "object",
-      properties: {
-        include_screenshot: { type: "boolean", description: "Also attach a screenshot of the viewport (default false)." },
-      },
+      properties: { include_screenshot: { type: "boolean" } },
       required: [],
       additionalProperties: false,
     },
   },
   {
     name: "screenshot",
-    description: "Take a screenshot of the current viewport (JPEG). Use it to visually verify state or when text snapshots are ambiguous.",
+    description: "Screenshot of the viewport. For layout, modals, maps, images.",
     input_schema: { type: "object", properties: {}, required: [], additionalProperties: false },
     strict: true,
   },
   {
     name: "click",
-    description: "Click an element by its [N] ref from the latest get_page_state snapshot.",
+    description: "Click element [N] from the latest page state.",
     input_schema: {
       type: "object",
-      properties: { ref: { type: "integer", description: "Element ref number from the latest snapshot" } },
+      properties: { ref: { type: "integer" } },
       required: ["ref"],
       additionalProperties: false,
     },
@@ -50,7 +49,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "click_at",
-    description: "Click at viewport coordinates (pixels). Fallback for canvases, maps or elements that have no ref; coordinates come from a screenshot (1280x800 viewport).",
+    description: "Click viewport coordinates (1280x800). Fallback for canvases and maps.",
     input_schema: {
       type: "object",
       properties: { x: { type: "integer" }, y: { type: "integer" } },
@@ -61,14 +60,14 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "type_text",
-    description: "Type text into an input/textarea/editable element by ref. Clears existing content by default. Optionally presses Enter afterwards (useful for search boxes).",
+    description: "Type into element [N]. Clears it first unless clear=false. press_enter submits.",
     input_schema: {
       type: "object",
       properties: {
         ref: { type: "integer" },
         text: { type: "string" },
-        clear: { type: "boolean", description: "Clear the field first (default true)" },
-        press_enter: { type: "boolean", description: "Press Enter after typing (default false)" },
+        clear: { type: "boolean" },
+        press_enter: { type: "boolean" },
       },
       required: ["ref", "text"],
       additionalProperties: false,
@@ -76,7 +75,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "press_key",
-    description: "Press a keyboard key or combination, e.g. 'Enter', 'Escape', 'Tab', 'ArrowDown', 'Control+A'.",
+    description: "Press a key: Enter, Escape, Tab, ArrowDown, Control+A…",
     input_schema: {
       type: "object",
       properties: { key: { type: "string" } },
@@ -87,13 +86,13 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "scroll",
-    description: "Scroll the page (or a scrollable element given by ref) to reveal more content. Default amount is ~80% of the viewport.",
+    description: "Scroll the page, or a container given by ref, to reveal more.",
     input_schema: {
       type: "object",
       properties: {
         direction: { type: "string", enum: ["up", "down", "left", "right"] },
-        pixels: { type: "integer", description: "Optional scroll distance in pixels" },
-        ref: { type: "integer", description: "Optional ref of a scrollable container (list, modal, panel)" },
+        pixels: { type: "integer" },
+        ref: { type: "integer" },
       },
       required: ["direction"],
       additionalProperties: false,
@@ -101,7 +100,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "select_option",
-    description: "Choose an option in a native <select> element by its visible label (or value).",
+    description: "Choose an option in a native <select> by visible label.",
     input_schema: {
       type: "object",
       properties: { ref: { type: "integer" }, value: { type: "string" } },
@@ -112,7 +111,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "hover",
-    description: "Move the mouse over an element by ref (opens hover menus / tooltips).",
+    description: "Hover element [N] to open menus or tooltips.",
     input_schema: {
       type: "object",
       properties: { ref: { type: "integer" } },
@@ -123,7 +122,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "wait",
-    description: "Wait for N seconds (max 30) for content to load or animations to finish.",
+    description: "Wait N seconds (max 30) for content to load.",
     input_schema: {
       type: "object",
       properties: { seconds: { type: "number" } },
@@ -134,19 +133,19 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "go_back",
-    description: "Navigate back in browser history.",
+    description: "Back in browser history.",
     input_schema: { type: "object", properties: {}, required: [], additionalProperties: false },
     strict: true,
   },
   {
     name: "list_tabs",
-    description: "List open browser tabs with their indexes; the active one is marked with *.",
+    description: "List open tabs; the active one is marked *.",
     input_schema: { type: "object", properties: {}, required: [], additionalProperties: false },
     strict: true,
   },
   {
     name: "switch_tab",
-    description: "Make another tab active by index (see list_tabs).",
+    description: "Activate another tab by index.",
     input_schema: {
       type: "object",
       properties: { index: { type: "integer" } },
@@ -157,13 +156,10 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "get_page_text",
-    description: "Read the visible text of the page directly, in chunks (offset/max_chars). Prefer query_page for long pages - it keeps your context small.",
+    description: "Read the page text in chunks (offset, max_chars). Prefer query_page.",
     input_schema: {
       type: "object",
-      properties: {
-        offset: { type: "integer", description: "Start position (default 0)" },
-        max_chars: { type: "integer", description: "Max characters to return (default 6000, max 20000)" },
-      },
+      properties: { offset: { type: "integer" }, max_chars: { type: "integer" } },
       required: [],
       additionalProperties: false,
     },
@@ -171,11 +167,10 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "query_page",
     description:
-      "Ask a DOM sub-agent a question about the current page. It reads the FULL page text and the full list of interactive elements (far more than fits in your snapshot) and answers concisely, citing element refs [N] you can act on. " +
-      "Use it to find things among many items (products, search results, emails, vacancies), to extract data (prices, names, dates), or to check whether something is present.",
+      "Ask a sub-agent about the current page. It reads the whole page and answers briefly with element refs [N]. Use it to find one item among many (products, results, emails, vacancies) or to extract data.",
     input_schema: {
       type: "object",
-      properties: { question: { type: "string", description: "A specific question about the page content" } },
+      properties: { question: { type: "string" } },
       required: ["question"],
       additionalProperties: false,
     },
@@ -183,7 +178,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "remember",
-    description: "Save a short note to your persistent task memory (facts, IDs, prices, decisions). Notes survive context compaction, so record anything you must not forget.",
+    description: "Save a short note (facts, IDs, prices). Notes survive context compaction.",
     input_schema: {
       type: "object",
       properties: { note: { type: "string" } },
@@ -195,7 +190,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "ask_user",
     description:
-      "Pause and ask the user for information you genuinely cannot obtain yourself (login credentials, a choice between equally valid options with real consequences, confirmation before a payment or an irreversible action the task did not explicitly authorize). Do not use it for things you can figure out from the page.",
+      "Ask the user for what you cannot get yourself: credentials, a real choice between options, confirmation before paying or anything irreversible the task did not authorize.",
     input_schema: {
       type: "object",
       properties: { question: { type: "string" } },
@@ -206,13 +201,12 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "finish",
-    description:
-      "Declare the task finished. Call it only after verifying the result on the page. Provide the final report for the user: what was done, what was found, and anything left undone and why.",
+    description: "End the task after verifying the result. Report in the user's language: what you did, concrete data found, what is left undone.",
     input_schema: {
       type: "object",
       properties: {
         status: { type: "string", enum: ["success", "partial", "failed"] },
-        summary: { type: "string", description: "Final report in the user's language" },
+        summary: { type: "string" },
       },
       required: ["status", "summary"],
       additionalProperties: false,

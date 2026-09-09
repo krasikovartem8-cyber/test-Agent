@@ -58,7 +58,7 @@ export interface LLMProvider {
    * request can be retried. Returns false when the provider cannot edit its
    * history safely (Anthropic binds thinking blocks to the exact prefix).
    */
-  trimHistory(maxCharsPerResult: number): boolean;
+  trimHistory(maxCharsPerResult: number, keepLast?: number): boolean;
   /** Run one model turn over the current history and append the assistant reply. */
   turn(cb: TurnCallbacks): Promise<TurnResult>;
   /** Plain-text transcript of the history (for compaction). */

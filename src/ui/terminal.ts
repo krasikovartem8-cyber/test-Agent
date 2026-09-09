@@ -1,11 +1,17 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import chalk from "chalk";
+import { config } from "../config.js";
 import type { AgentUI } from "./types.js";
 
-const RESULT_PREVIEW = process.env.VERBOSE === "1" ? Number.MAX_SAFE_INTEGER : 1800;
-
-/** Terminal UI: streams the agent's thoughts, tool calls and results. */
+/**
+ * Terminal UI.
+ *
+ * Quiet by default: one line per action ("what was asked") and one short line
+ * for what came back ("what happened"). Page snapshots and model reasoning are
+ * not printed - they are what makes the console unreadable. VERBOSE=1 restores
+ * the full stream, including thinking and complete tool results.
+ */
 export class TerminalUI implements AgentUI {
   private rl = readline.createInterface({ input, output });
   private textOpen = false;
@@ -15,13 +21,14 @@ export class TerminalUI implements AgentUI {
   assistantText(delta: string): void {
     this.closeThinking();
     if (!this.textOpen) {
-      output.write(chalk.green("🤖 Assistant: "));
+      output.write(chalk.green("🤖 "));
       this.textOpen = true;
     }
     output.write(delta);
   }
 
   thinking(delta: string): void {
+    if (!config.verbose) return;
     if (!this.thinkingOpen) {
       output.write(chalk.gray("💭 "));
       this.thinkingOpen = true;
@@ -46,22 +53,30 @@ export class TerminalUI implements AgentUI {
 
   toolCall(name: string, inputObj: unknown): void {
     this.turnEnd();
-    const args = JSON.stringify(inputObj, null, 2);
-    output.write(chalk.cyan(`🔧 Using tool: ${chalk.bold(name)}\n`));
-    if (args !== "{}") output.write(chalk.cyan("   Input: ") + indent(args, 3).trimStart() + "\n");
+    if (config.verbose) {
+      const args = JSON.stringify(inputObj, null, 2);
+      output.write(chalk.cyan(`🔧 ${chalk.bold(name)}\n`));
+      if (args !== "{}") output.write(chalk.cyan(indent(args, 3)) + "\n");
+      return;
+    }
+    output.write(chalk.cyan(`🔧 ${chalk.bold(name)}`) + chalk.dim(summarizeArgs(inputObj)) + "\n");
   }
 
   toolResult(name: string, result: string, isError: boolean): void {
-    let text = result;
-    if (text.length > RESULT_PREVIEW) {
-      text = text.slice(0, RESULT_PREVIEW) + chalk.dim(`\n… (${result.length - RESULT_PREVIEW} more chars hidden; VERBOSE=1 to show all)`);
+    if (isError) {
+      output.write(chalk.red("   ✗ " + firstLine(result, 160)) + "\n");
+      return;
     }
-    const label = isError ? chalk.red("   Error: ") : chalk.dim("   Result: ");
-    output.write(label + indent(text, 3).trimStart() + "\n\n");
+    if (config.verbose) {
+      output.write(chalk.dim(indent(result, 3)) + "\n\n");
+      return;
+    }
+    output.write(chalk.dim("   → " + firstLine(result, 140)) + "\n");
   }
 
   subagentAnswer(answer: string): void {
-    output.write(chalk.magenta("🔍 DOM sub-agent: ") + indent(answer, 3).trimStart() + "\n");
+    const text = config.verbose ? answer : clamp(answer, 400);
+    output.write(chalk.magenta("🔍 ") + indent(text, 3).trimStart() + "\n");
   }
 
   info(message: string): void {
@@ -92,8 +107,15 @@ export class TerminalUI implements AgentUI {
 
   async askUser(question: string): Promise<string> {
     this.turnEnd();
-    output.write(chalk.yellowBright(`\n❓ Agent asks: ${question}\n`));
+    output.write(chalk.yellowBright(`\n❓ Агент спрашивает: ${question}\n`));
     return this.ask(chalk.bold("👤 You: "));
+  }
+
+  async waitForUserInBrowser(reason: string): Promise<void> {
+    this.turnEnd();
+    output.write(chalk.yellowBright(`\n🧩 ${reason}\n`));
+    output.write(chalk.yellowBright("   Решите её в открытом окне браузера, затем вернитесь сюда и нажмите Enter.\n"));
+    await this.ask(chalk.bold("👤 Нажмите Enter, когда будет готово: "));
   }
 
   async confirm(question: string): Promise<boolean> {
@@ -117,6 +139,35 @@ export class TerminalUI implements AgentUI {
     this.closed = true;
     this.rl.close();
   }
+}
+
+/** "navigate → market.yandex.ru", "click [42]", "type_text [7] «наушники» ⏎". */
+function summarizeArgs(inputObj: unknown): string {
+  const o = (inputObj ?? {}) as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof o.url === "string") parts.push(" " + o.url.replace(/^https?:\/\//, "").slice(0, 60));
+  if (o.ref !== undefined) parts.push(` [${o.ref}]`);
+  if (typeof o.text === "string") parts.push(` «${clamp(o.text, 40)}»`);
+  if (o.press_enter) parts.push(" ⏎");
+  if (typeof o.key === "string") parts.push(" " + o.key);
+  if (typeof o.direction === "string") parts.push(" " + o.direction);
+  if (typeof o.value === "string") parts.push(` «${clamp(o.value, 30)}»`);
+  if (typeof o.question === "string") parts.push(` «${clamp(o.question, 70)}»`);
+  if (typeof o.note === "string") parts.push(` «${clamp(o.note, 60)}»`);
+  if (typeof o.seconds === "number") parts.push(` ${o.seconds}s`);
+  if (typeof o.status === "string") parts.push(" " + o.status);
+  return parts.join("");
+}
+
+function clamp(s: string, n: number): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n - 1) + "…" : t;
+}
+
+function firstLine(s: string, n: number): string {
+  const line = s.split("\n").find((l) => l.trim()) ?? "";
+  const extra = s.length > line.length ? ` (+${s.length - line.length} символов)` : "";
+  return clamp(line, n) + chalk.dim(extra);
 }
 
 function indent(s: string, n: number): string {

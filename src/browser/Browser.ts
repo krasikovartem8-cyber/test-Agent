@@ -4,6 +4,11 @@ import fs from "node:fs";
 import { config } from "../config.js";
 import { collectSnapshot, type PageSnapshot } from "./snapshot.js";
 
+/** Tracking URLs on big sites run to thousands of characters; the model only needs to recognise the page. */
+export function shortUrl(u: string, max = 120): string {
+  return u.length > max ? u.slice(0, max) + "…" : u;
+}
+
 const ACTION_TIMEOUT = 10_000;
 const NAV_TIMEOUT = 30_000;
 
@@ -50,8 +55,20 @@ export class BrowserController {
       });
     } catch (err) {
       if (config.browserChannel !== "chrome") throw err;
-      // Google Chrome is not installed - fall back to Playwright's Chromium.
-      this.context = await chromium.launchPersistentContext(userDataDir, launchOpts);
+      // Google Chrome could not be launched - say why, then try Playwright's
+      // own Chromium (which may not be downloaded either).
+      console.warn(`⚠ Could not launch Google Chrome: ${(err as Error).message.split("\n")[0]}`);
+      console.warn("  Falling back to Playwright's Chromium…");
+      try {
+        this.context = await chromium.launchPersistentContext(userDataDir, launchOpts);
+      } catch (fallbackErr) {
+        throw new Error(
+          `Neither Google Chrome nor Playwright's Chromium could start.\n` +
+            `Chrome: ${(err as Error).message.split("\n")[0]}\n` +
+            `Chromium: ${(fallbackErr as Error).message.split("\n")[0]}\n` +
+            `Fix: close other Chrome windows using the same profile directory, or run "npx playwright install chromium".`,
+        );
+      }
     }
 
     this.context.setDefaultTimeout(ACTION_TIMEOUT);
@@ -91,7 +108,7 @@ export class BrowserController {
       // A click that opens a new tab almost always means the user wants to
       // continue there, so switch automatically and say so.
       this.active = fresh[fresh.length - 1];
-      notes.push(`A new tab was opened and is now active: ${this.active.url()}`);
+      notes.push(`A new tab was opened and is now active: ${shortUrl(this.active.url())}`);
     }
     return notes.length ? "\n" + notes.join("\n") : "";
   }
@@ -111,13 +128,13 @@ export class BrowserController {
       if (!/Timeout/i.test(err.message)) throw err;
     });
     await this.settle();
-    return { message: `Navigated to ${this.active.url()} (title: "${await this.active.title()}")` + this.drainEvents(), navigated: true };
+    return { message: `Navigated to ${shortUrl(this.active.url())} (title: "${await this.active.title()}")` + this.drainEvents(), navigated: true };
   }
 
   async goBack(): Promise<ActionOutcome> {
     await this.active.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
     await this.settle();
-    return { message: `Now at ${this.active.url()}` + this.drainEvents(), navigated: true };
+    return { message: `Now at ${shortUrl(this.active.url())}` + this.drainEvents(), navigated: true };
   }
 
   async snapshot(): Promise<PageSnapshot> {
@@ -203,7 +220,7 @@ export class BrowserController {
     await this.settle();
     const after = this.active.url();
     let message = `Clicked ${this.describeRef(ref)}.`;
-    if (after !== before) message += ` URL changed to ${after}`;
+    if (after !== before) message += ` URL changed to ${shortUrl(after)}`;
     return { message: message + this.drainEvents(), navigated: after !== before };
   }
 
@@ -213,7 +230,7 @@ export class BrowserController {
     await this.settle();
     const after = this.active.url();
     let message = `Clicked at (${x}, ${y}).`;
-    if (after !== before) message += ` URL changed to ${after}`;
+    if (after !== before) message += ` URL changed to ${shortUrl(after)}`;
     return { message: message + this.drainEvents(), navigated: after !== before };
   }
 
@@ -260,7 +277,7 @@ export class BrowserController {
       await this.active.keyboard.press("Enter");
       await this.settle();
       message += " Pressed Enter.";
-      if (this.active.url() !== before) message += ` URL changed to ${this.active.url()}`;
+      if (this.active.url() !== before) message += ` URL changed to ${shortUrl(this.active.url())}`;
     } else {
       await this.active.waitForTimeout(300);
     }
@@ -272,7 +289,7 @@ export class BrowserController {
     await this.active.keyboard.press(key);
     await this.settle(300);
     let message = `Pressed ${key}.`;
-    if (this.active.url() !== before) message += ` URL changed to ${this.active.url()}`;
+    if (this.active.url() !== before) message += ` URL changed to ${shortUrl(this.active.url())}`;
     return { message: message + this.drainEvents() };
   }
 
@@ -333,6 +350,56 @@ export class BrowserController {
     this.active = p;
     await p.bringToFront();
     return { message: `Switched to tab ${index}: ${p.url()}`, navigated: true };
+  }
+
+  /**
+   * Detect that the site is showing a human-verification page (captcha, "are
+   * you a robot", access blocked). The agent does not try to solve these - it
+   * hands the browser back to the user, who solves it and lets the run
+   * continue. Returns a short description, or null when the page looks normal.
+   */
+  async detectCaptcha(): Promise<string | null> {
+    try {
+      return await this.active.evaluate(() => {
+        const url = location.href;
+        const text = ((document.body?.innerText ?? "") + " " + document.title).toLowerCase();
+
+        const urlMarkers = ["showcaptcha", "/captcha", "checkcaptcha", "/sorry/", "challenge-platform", "cdn-cgi/l/chk"];
+        for (const m of urlMarkers) if (url.toLowerCase().includes(m)) return `captcha page (URL contains "${m}")`;
+
+        const phrases = [
+          "подтвердите, что вы не робот",
+          "подтвердите что вы не робот",
+          "вы не робот",
+          "я не робот",
+          "введите символы",
+          "доступ к сервису временно запрещён",
+          "доступ к сервису ограничен",
+          "показалось подозрительным",
+          "слишком много запросов",
+          "verify you are human",
+          "are you a robot",
+          "i'm not a robot",
+          "unusual traffic",
+          "security check",
+          "checking your browser",
+        ];
+        for (const p of phrases) if (text.includes(p)) return `verification page (text: "${p}")`;
+
+        const frames = Array.from(document.querySelectorAll("iframe")).map((f) => f.getAttribute("src") ?? "");
+        const frameMarkers = ["recaptcha", "hcaptcha", "captcha-api", "smartcaptcha", "turnstile", "funcaptcha", "arkoselabs"];
+        for (const f of frames) for (const m of frameMarkers) if (f.includes(m)) return `captcha widget (${m})`;
+
+        return null;
+      });
+    } catch {
+      return null; // mid-navigation; the next observation will tell us
+    }
+  }
+
+  /** Raise the browser window so the user can act in it. */
+  async focusWindow(): Promise<void> {
+    await this.active.bringToFront().catch(() => {});
   }
 
   async close(): Promise<void> {

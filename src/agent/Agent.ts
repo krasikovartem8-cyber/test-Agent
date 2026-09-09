@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { BrowserController } from "../browser/Browser.js";
+import { BrowserController, shortUrl } from "../browser/Browser.js";
 import { formatSnapshot } from "../browser/snapshot.js";
 import { ContextManager } from "./context.js";
 import { queryPage } from "./subagent.js";
@@ -21,6 +21,7 @@ type ExecResult = { text: string; image?: ToolOutcome["image"] };
  */
 export class Agent {
   readonly ctx: ContextManager;
+  private captchaPauses = 0;
 
   constructor(
     private llm: LLMProvider,
@@ -35,6 +36,7 @@ export class Agent {
     let steps = 0;
     let emptyTurns = 0;
     let textOnlyTurns = 0;
+    this.captchaPauses = 0;
 
     while (true) {
       if (steps >= config.maxSteps) {
@@ -104,10 +106,15 @@ export class Agent {
         }
       }
 
-      const note = stuck
-        ? "Note: you have issued the same action three times in a row. It is not working - change your approach (scroll, keyboard, another element, query_page, a screenshot, or a different path)."
-        : undefined;
-      this.llm.addToolResults(results, note);
+      const notes: string[] = [];
+      if (stuck) {
+        notes.push(
+          "Note: you have issued the same action three times in a row. It is not working - change your approach (scroll, keyboard, another element, query_page, a screenshot, or a different path).",
+        );
+      }
+      const captchaNote = finished ? undefined : await this.handleCaptcha();
+      if (captchaNote) notes.push(captchaNote);
+      this.llm.addToolResults(results, notes.length ? notes.join("\n\n") : undefined);
       steps++;
 
       if (finished) return finished;
@@ -118,6 +125,41 @@ export class Agent {
         this.ui.info("Context compacted; continuing from the summary.");
       }
     }
+  }
+
+  /**
+   * Human verification (captcha, "prove you are not a robot", access blocked).
+   *
+   * The agent never solves these and never tries to work around bot
+   * protection. It hands the browser to the person running it: the window is
+   * raised, the run pauses, and after the user solves it the loop continues
+   * from whatever page the site returns. Returns a note for the model, or
+   * undefined when the page is normal.
+   */
+  private async handleCaptcha(): Promise<string | undefined> {
+    const found = await this.browser.detectCaptcha();
+    if (!found) return undefined;
+
+    if (config.headless) {
+      this.ui.warn(`The site is showing a verification page (${found}) and the browser is headless - nobody can solve it.`);
+      return `The site is showing a human-verification page (${found}). The browser runs headless, so it cannot be solved now. Do not try to bypass it: take another route (a different entry point, a direct URL, go back), or call finish with status partial and explain this.`;
+    }
+
+    if (this.captchaPauses >= 3) {
+      return `The site is still showing a human-verification page (${found}) after ${this.captchaPauses} attempts. Stop retrying this route: try a different path or finish with status partial explaining that the site blocks automated access.`;
+    }
+
+    this.captchaPauses++;
+    await this.browser.focusWindow();
+    await this.ui.waitForUserInBrowser(`Сайт показывает проверку «вы не робот» (${found}).`);
+    await this.browser.settle(1500);
+
+    if (await this.browser.detectCaptcha()) {
+      this.ui.warn("Проверка всё ещё на экране; продолжаю, но, возможно, придётся решить её ещё раз.");
+      return `The verification page is still showing (${found}). If it does not clear, take a different route or finish with status partial.`;
+    }
+    this.ui.info("Проверка пройдена, продолжаю работу.");
+    return `The user solved the verification page for you. The browser is now at ${this.browser.page.url()}. Call get_page_state before acting: every earlier element ref is invalid.`;
   }
 
   /**
@@ -145,6 +187,9 @@ export class Agent {
     let tooLarge = 0;
     while (true) {
       try {
+        // Keep only the newest observations at full size: older page states are
+        // stale anyway, and they are what makes long runs expensive.
+        this.llm.trimHistory(400, config.keepFullObservations);
         const result = await this.llm.turn({
           onText: (d) => this.ui.assistantText(d),
           onThinking: (d) => this.ui.thinking(d),
@@ -167,7 +212,9 @@ export class Agent {
         }
         if (err instanceof LLMTransientError && attempt < 4) {
           attempt++;
-          const delay = 3000 * attempt;
+          // A malformed generation is worth retrying at once; rate limits and
+          // network errors need to back off.
+          const delay = /invalid tool-call JSON/.test(err.message) ? 500 : 3000 * attempt;
           this.ui.warn(`API error (${err.message}); retrying in ${delay / 1000}s…`);
           await new Promise((r) => setTimeout(r, delay));
           continue;
@@ -177,11 +224,87 @@ export class Agent {
     }
   }
 
+  /** Actions after which the model needs to see the page again. */
+  private static readonly OBSERVE_AFTER = new Set([
+    "navigate",
+    "click",
+    "click_at",
+    "type_text",
+    "press_key",
+    "scroll",
+    "select_option",
+    "hover",
+    "go_back",
+    "switch_tab",
+    "wait",
+  ]);
+
+  /**
+   * Append the resulting page state to an action's result, so one model turn
+   * does "act and observe" instead of two. Halves the number of API calls -
+   * and since every call re-sends the whole history, roughly halves the tokens.
+   */
+  private async withState(message: string): Promise<ExecResult> {
+    if (!config.autoObserve) return { text: message };
+    try {
+      const snap = await this.browser.snapshot();
+      return { text: message + "\n\n--- page state ---\n" + formatSnapshot(snap, config.snapshotTextChars, config.snapshotMaxElements) };
+    } catch {
+      return { text: message + "\n(could not read the page state; call get_page_state)" };
+    }
+  }
+
   private async execute(name: string, input: ToolInput): Promise<ExecResult> {
+    const b = this.browser;
+    if (Agent.OBSERVE_AFTER.has(name)) return this.withState(await this.act(name, input));
+    return this.observeOnly(name, input);
+  }
+
+  /** Actions that change the page; they return a one-line description. */
+  private async act(name: string, input: ToolInput): Promise<string> {
     const b = this.browser;
     switch (name) {
       case "navigate":
-        return { text: (await b.navigate(String(input.url))).message };
+        return (await b.navigate(String(input.url))).message;
+      case "click":
+        return (await b.click(Number(input.ref))).message;
+      case "click_at":
+        return (await b.clickAt(Number(input.x), Number(input.y))).message;
+      case "type_text":
+        return (
+          await b.type(Number(input.ref), String(input.text), {
+            clear: input.clear === undefined ? true : Boolean(input.clear),
+            pressEnter: Boolean(input.press_enter),
+          })
+        ).message;
+      case "press_key":
+        return (await b.pressKey(String(input.key))).message;
+      case "scroll":
+        return (
+          await b.scroll(
+            input.direction as "up" | "down" | "left" | "right",
+            input.pixels === undefined ? undefined : Number(input.pixels),
+            input.ref === undefined ? undefined : Number(input.ref),
+          )
+        ).message;
+      case "select_option":
+        return (await b.selectOption(Number(input.ref), String(input.value))).message;
+      case "hover":
+        return (await b.hover(Number(input.ref))).message;
+      case "go_back":
+        return (await b.goBack()).message;
+      case "switch_tab":
+        return (await b.switchTab(Number(input.index))).message;
+      case "wait":
+        return (await b.wait(Number(input.seconds))).message;
+      default:
+        throw new Error(`Unknown action: ${name}`);
+    }
+  }
+
+  private async observeOnly(name: string, input: ToolInput): Promise<ExecResult> {
+    const b = this.browser;
+    switch (name) {
       case "get_page_state": {
         const snap = await b.snapshot();
         const text = formatSnapshot(snap, config.snapshotTextChars, config.snapshotMaxElements);
@@ -190,44 +313,9 @@ export class Agent {
       }
       case "screenshot":
         if (!config.vision) return { text: "This model cannot read images. Rely on get_page_state and query_page instead." };
-        return { text: `Screenshot of the viewport at ${b.page.url()}`, image: await b.screenshot() };
-      case "click":
-        return { text: (await b.click(Number(input.ref))).message };
-      case "click_at":
-        return { text: (await b.clickAt(Number(input.x), Number(input.y))).message };
-      case "type_text":
-        return {
-          text: (
-            await b.type(Number(input.ref), String(input.text), {
-              clear: input.clear === undefined ? true : Boolean(input.clear),
-              pressEnter: Boolean(input.press_enter),
-            })
-          ).message,
-        };
-      case "press_key":
-        return { text: (await b.pressKey(String(input.key))).message };
-      case "scroll":
-        return {
-          text: (
-            await b.scroll(
-              input.direction as "up" | "down" | "left" | "right",
-              input.pixels === undefined ? undefined : Number(input.pixels),
-              input.ref === undefined ? undefined : Number(input.ref),
-            )
-          ).message,
-        };
-      case "select_option":
-        return { text: (await b.selectOption(Number(input.ref), String(input.value))).message };
-      case "hover":
-        return { text: (await b.hover(Number(input.ref))).message };
-      case "wait":
-        return { text: (await b.wait(Number(input.seconds))).message };
-      case "go_back":
-        return { text: (await b.goBack()).message };
+        return { text: `Screenshot of the viewport at ${shortUrl(b.page.url())}`, image: await b.screenshot() };
       case "list_tabs":
         return { text: b.listTabs() };
-      case "switch_tab":
-        return { text: (await b.switchTab(Number(input.index))).message };
       case "get_page_text": {
         const full = await b.pageText();
         const offset = Math.max(0, Number(input.offset ?? 0));

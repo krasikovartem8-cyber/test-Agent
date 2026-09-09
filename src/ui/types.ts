@@ -13,4 +13,6 @@ export interface AgentUI {
   warn(message: string): void;
   askUser(question: string): Promise<string>;
   confirm(question: string): Promise<boolean>;
+  /** Ask the user to act in the browser window, then press Enter. */
+  waitForUserInBrowser(reason: string): Promise<void>;
 }

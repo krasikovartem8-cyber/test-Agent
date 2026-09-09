@@ -22,6 +22,9 @@ export class ContextManager {
   task = "";
   /** Size of the context as of the last model response. */
   contextTokens = 0;
+  /** Sum of prompt+completion tokens across all turns of the current task. */
+  billedTokens = 0;
+  turns = 0;
   compactions = 0;
   private recentCalls: string[] = [];
 
@@ -30,6 +33,8 @@ export class ContextManager {
   startTask(task: string): void {
     this.task = task;
     this.recentCalls = [];
+    this.billedTokens = 0;
+    this.turns = 0;
     this.llm.addUserText(task);
   }
 
@@ -42,6 +47,9 @@ export class ContextManager {
 
   recordUsage(contextTokens: number): void {
     this.contextTokens = contextTokens;
+    // Every call re-sends the history, so this is what the provider actually bills.
+    this.billedTokens += contextTokens;
+    this.turns++;
   }
 
   needsCompaction(): boolean {

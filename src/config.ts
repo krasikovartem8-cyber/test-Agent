@@ -43,4 +43,16 @@ export const config = {
   subagentMaxElements: envInt("SUBAGENT_MAX_ELEMENTS", 600),
   /** Chars of transcript handed to the summarizer during compaction. */
   transcriptChars: envInt("TRANSCRIPT_CHARS", 40_000),
+  /** VERBOSE=1 prints thinking and full tool results; otherwise one line each. */
+  verbose: process.env.VERBOSE === "1",
+  /**
+   * Attach the new page state to every action result, so one model turn does
+   * "act + observe" instead of two. Roughly halves the API calls per task.
+   */
+  autoObserve: process.env.AUTO_OBSERVE !== "0",
+  /**
+   * How many recent observations stay in the history at full size. Older ones
+   * are truncated before each turn, which keeps long runs cheap.
+   */
+  keepFullObservations: envInt("KEEP_FULL_OBSERVATIONS", 2),
 };

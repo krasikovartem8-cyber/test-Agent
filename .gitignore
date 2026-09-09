@@ -6,3 +6,5 @@ recordings/
 screenshots/
 *.log
 .smoke-profile/
+.test-profile/
+.smoke-headed/

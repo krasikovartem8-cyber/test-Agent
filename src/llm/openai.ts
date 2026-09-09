@@ -68,13 +68,21 @@ export class OpenAIProvider implements LLMProvider {
     this.messages = [];
   }
 
-  /** Truncate long tool results (page snapshots are by far the biggest). */
-  trimHistory(maxCharsPerResult: number): boolean {
+  /**
+   * Truncate long tool results (page snapshots are by far the biggest), keeping
+   * the `keepLast` most recent ones intact - those are the page the agent is
+   * looking at right now.
+   */
+  trimHistory(maxCharsPerResult: number, keepLast = 0): boolean {
+    const toolIdx = this.messages.map((m, i) => (m.role === "tool" ? i : -1)).filter((i) => i >= 0);
+    const cutoff = toolIdx[toolIdx.length - keepLast] ?? Infinity;
     let changed = false;
-    for (const m of this.messages) {
+    for (let i = 0; i < this.messages.length; i++) {
+      if (i >= cutoff) break;
+      const m = this.messages[i];
       if (m.role !== "tool" || typeof m.content !== "string") continue;
       if (m.content.length <= maxCharsPerResult) continue;
-      m.content = m.content.slice(0, maxCharsPerResult) + "\n…[older observation trimmed to save context; take a fresh get_page_state if you need it]";
+      m.content = m.content.slice(0, maxCharsPerResult) + "\n…[older observation trimmed; call get_page_state for a fresh view]";
       changed = true;
     }
     return changed;
@@ -193,9 +201,16 @@ export class OpenAIProvider implements LLMProvider {
 function mapError(err: unknown): Error {
   if (err instanceof OpenAI.AuthenticationError) return new LLMAuthError("OpenAI API authentication failed - check OPENAI_API_KEY.");
   const status = (err as { status?: number }).status;
+  const message = (err as Error).message ?? "";
   // 413 on OpenAI-compatible gateways: over the context window, or over a
   // per-minute token budget that a single request cannot satisfy.
-  if (status === 413) return new LLMTooLargeError((err as Error).message.split("\n")[0]);
+  if (status === 413) return new LLMTooLargeError(message.split("\n")[0]);
+  // Smaller models sometimes emit malformed JSON in tool call arguments and the
+  // gateway rejects the generation. Nothing was added to the history, so simply
+  // asking again usually produces a valid call.
+  if (status === 400 && /tool[_ ]call|arguments as JSON|failed to parse/i.test(message)) {
+    return new LLMTransientError("model produced invalid tool-call JSON");
+  }
   if (err instanceof OpenAI.RateLimitError || err instanceof OpenAI.APIConnectionError || err instanceof OpenAI.InternalServerError) {
     return new LLMTransientError((err as Error).message.split("\n")[0]);
   }

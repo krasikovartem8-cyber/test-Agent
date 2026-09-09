@@ -226,7 +226,7 @@ export function formatSnapshot(s: PageSnapshot, textChars: number, maxElements: 
   const inView = shown.filter((e) => e.inViewport);
   const outView = shown.filter((e) => !e.inViewport);
   const lines: string[] = [];
-  lines.push("URL: " + s.url);
+  lines.push("URL: " + (s.url.length > 140 ? s.url.slice(0, 140) + "…" : s.url));
   lines.push("Title: " + s.title);
   const screens = Math.max(1, Math.ceil(s.scroll.pageHeight / Math.max(1, s.scroll.viewportHeight)));
   const cur = Math.min(screens, Math.floor(s.scroll.y / Math.max(1, s.scroll.viewportHeight)) + 1);

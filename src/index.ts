@@ -75,8 +75,11 @@ async function main(): Promise<void> {
     } catch (err) {
       console.log(chalk.red(`\n❌ Agent error: ${(err as Error).message}`));
     }
+    const ctx = agent.ctx;
     console.log(
-      chalk.dim(`⏱ ${Math.round((Date.now() - started) / 1000)}s · context ${Math.round(agent.ctx.contextTokens / 1000)}k tokens · compactions ${agent.ctx.compactions}`),
+      chalk.dim(
+        `⏱ ${Math.round((Date.now() - started) / 1000)}s · ${ctx.turns} запросов к модели · израсходовано ${ctx.billedTokens.toLocaleString("ru-RU")} токенов · контекст ${Math.round(ctx.contextTokens / 1000)}k · сжатий ${ctx.compactions}`,
+      ),
     );
   };
 
