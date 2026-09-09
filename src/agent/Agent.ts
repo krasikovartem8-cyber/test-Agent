@@ -279,14 +279,38 @@ export class Agent {
     return this.observeOnly(name, input);
   }
 
+  /**
+   * Safety layer. Some clicks cannot be undone by going back: paying, placing
+   * an order, deleting, sending. Before such a click the run pauses and the
+   * user decides - the model's own judgement is not the last line of defence.
+   * Matching is on the control's visible name, so it works on any site.
+   */
+  private static readonly IRREVERSIBLE =
+    /(удал|очист|стере|отмен(и|ить) заказ|оплат|купить|оформить|заказать|подтверд|отправ|перевести|вывести|списать|подписать|delete|remove|pay\b|buy now|place order|checkout|submit|confirm|send\b|unsubscribe|deactivate|archive)/i;
+
+  private async confirmIfIrreversible(ref: number): Promise<string | null> {
+    if (!config.safeMode) return null;
+    const el = this.browser.getLastSnapshot()?.elements.find((e) => e.ref === ref);
+    const label = el?.name?.trim();
+    if (!label || !Agent.IRREVERSIBLE.test(label)) return null;
+
+    await this.browser.focusWindow();
+    const ok = await this.ui.confirm(`Агент хочет нажать «${label}» — действие может быть необратимым. Разрешить?`);
+    if (ok) return null;
+    return `The user declined the click on "${label}". Do not repeat it. Continue with the rest of the task or finish, reporting that this step was not allowed.`;
+  }
+
   /** Actions that change the page; they return a one-line description. */
   private async act(name: string, input: ToolInput): Promise<string> {
     const b = this.browser;
     switch (name) {
       case "navigate":
         return (await b.navigate(String(input.url))).message;
-      case "click":
+      case "click": {
+        const declined = await this.confirmIfIrreversible(Number(input.ref));
+        if (declined) return declined;
         return (await b.click(Number(input.ref))).message;
+      }
       case "click_at":
         return (await b.clickAt(Number(input.x), Number(input.y))).message;
       case "type_text":

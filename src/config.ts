@@ -53,6 +53,8 @@ export const config = {
   subagentMaxElements: envInt("SUBAGENT_MAX_ELEMENTS", 600),
   /** Chars of transcript handed to the summarizer during compaction. */
   transcriptChars: envInt("TRANSCRIPT_CHARS", 40_000),
+  /** SAFE_MODE=0 disables the confirmation prompt before irreversible clicks. */
+  safeMode: process.env.SAFE_MODE !== "0",
   /** VERBOSE=1 prints thinking and full tool results; otherwise one line each. */
   verbose: process.env.VERBOSE === "1",
   /**

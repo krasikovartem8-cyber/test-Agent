@@ -141,7 +141,7 @@ export class TerminalUI implements AgentUI {
   }
 }
 
-/** "navigate → market.yandex.ru", "click [42]", "type_text [7] «наушники» ⏎". */
+/** "navigate example.com", "click [42]", "type_text [7] «запрос» ⏎". */
 function summarizeArgs(inputObj: unknown): string {
   const o = (inputObj ?? {}) as Record<string, unknown>;
   const parts: string[] = [];
